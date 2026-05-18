@@ -8,7 +8,13 @@ import {
   updateProfile,
   type User,
 } from "firebase/auth";
-import { doc, getDoc, serverTimestamp, setDoc } from "firebase/firestore";
+import {
+  deleteDoc,
+  doc,
+  getDoc,
+  serverTimestamp,
+  setDoc,
+} from "firebase/firestore";
 import { getFirebase, SUPERADMIN_EMAIL } from "./client";
 
 export type AppRole = "admin" | "lecturer" | "student";
@@ -21,48 +27,100 @@ export type AppUserProfile = {
   createdAt?: unknown;
 };
 
+/**
+ * Two-collection layout in Firestore:
+ *  - admins/{uid} → platform staff (role is implicitly "admin")
+ *  - users/{uid}  → students & lecturers (role explicit on the doc)
+ */
+const ADMINS_COLLECTION = "admins";
 const USERS_COLLECTION = "users";
 
-/** Read the Firestore profile for a Firebase user. */
+function isSuperadminEmail(email: string | null | undefined): boolean {
+  return !!email && email.toLowerCase() === SUPERADMIN_EMAIL;
+}
+
+/**
+ * Read the profile for a Firebase user. Admins are stored in `admins/{uid}`,
+ * everyone else lives in `users/{uid}`.
+ */
 export async function getUserProfile(uid: string): Promise<AppUserProfile | null> {
   const { db } = getFirebase();
-  const snap = await getDoc(doc(db, USERS_COLLECTION, uid));
-  return snap.exists() ? (snap.data() as AppUserProfile) : null;
+  const adminSnap = await getDoc(doc(db, ADMINS_COLLECTION, uid));
+  if (adminSnap.exists()) {
+    return { ...(adminSnap.data() as AppUserProfile), role: "admin" };
+  }
+  const userSnap = await getDoc(doc(db, USERS_COLLECTION, uid));
+  if (userSnap.exists()) {
+    const data = userSnap.data() as AppUserProfile;
+    // Defensive: someone could have written role="admin" to users/{uid}
+    // before we moved admins into their own collection. Treat as student.
+    return { ...data, role: data.role === "admin" ? "student" : data.role };
+  }
+  return null;
 }
 
 /** Decide what role a freshly-signed-in account should have. */
 function resolveBootstrapRole(email: string, requestedRole?: AppRole): AppRole {
-  if (email.toLowerCase() === SUPERADMIN_EMAIL) return "admin";
+  if (isSuperadminEmail(email)) return "admin";
   if (requestedRole === "lecturer") return "lecturer";
   return "student";
 }
 
 /**
  * Ensure a Firestore profile exists for the user.
- * - First login of the configured superadmin email is auto-promoted to `admin`.
- * - Other accounts default to `student` unless `requestedRole` is provided.
+ *  - Superadmin email → `admins/{uid}` (role "admin"), self-heals from `users/{uid}`.
+ *  - Everyone else    → `users/{uid}` with the requested role (defaults to student).
  */
 export async function ensureProfile(
   user: User,
   options?: { requestedRole?: AppRole; name?: string },
 ): Promise<AppUserProfile> {
   const { db } = getFirebase();
-  const ref = doc(db, USERS_COLLECTION, user.uid);
-  const existing = await getDoc(ref);
+  const adminRef = doc(db, ADMINS_COLLECTION, user.uid);
+  const userRef = doc(db, USERS_COLLECTION, user.uid);
 
-  if (existing.exists()) {
-    const profile = existing.data() as AppUserProfile;
-    // Self-heal: if the configured superadmin email is not yet marked admin, fix it.
-    if (
-      user.email &&
-      user.email.toLowerCase() === SUPERADMIN_EMAIL &&
-      profile.role !== "admin"
-    ) {
-      const upgraded: AppUserProfile = { ...profile, role: "admin" };
-      await setDoc(ref, upgraded, { merge: true });
-      return upgraded;
+  const isAdminEmail = isSuperadminEmail(user.email);
+
+  // 1. Admin lives in `admins/{uid}`.
+  const adminSnap = await getDoc(adminRef);
+  if (adminSnap.exists()) {
+    return { ...(adminSnap.data() as AppUserProfile), role: "admin" };
+  }
+
+  // 2. If the email is the superadmin, migrate any stale `users/{uid}` doc
+  //    into `admins/{uid}` and remove the old record.
+  if (isAdminEmail) {
+    const staleSnap = await getDoc(userRef);
+    const baseName =
+      options?.name ??
+      (staleSnap.exists() ? (staleSnap.data() as AppUserProfile).name : null) ??
+      user.displayName ??
+      user.email?.split("@")[0] ??
+      "Admin";
+
+    const adminProfile: AppUserProfile = {
+      uid: user.uid,
+      email: user.email ?? "",
+      name: baseName,
+      role: "admin",
+      createdAt: serverTimestamp(),
+    };
+    await setDoc(adminRef, adminProfile);
+    if (staleSnap.exists()) {
+      try {
+        await deleteDoc(userRef);
+      } catch {
+        // non-fatal — rules may forbid delete; the FE ignores users/{uid} for this email anyway.
+      }
     }
-    return profile;
+    return adminProfile;
+  }
+
+  // 3. Otherwise the account is a student or lecturer.
+  const existingUser = await getDoc(userRef);
+  if (existingUser.exists()) {
+    const data = existingUser.data() as AppUserProfile;
+    return { ...data, role: data.role === "admin" ? "student" : data.role };
   }
 
   const role = resolveBootstrapRole(user.email ?? "", options?.requestedRole);
@@ -73,7 +131,7 @@ export async function ensureProfile(
     role,
     createdAt: serverTimestamp(),
   };
-  await setDoc(ref, profile);
+  await setDoc(userRef, profile);
   return profile;
 }
 
