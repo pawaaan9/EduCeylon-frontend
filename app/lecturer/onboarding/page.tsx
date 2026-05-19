@@ -12,8 +12,26 @@ import {
 } from "@/components/icons";
 import { GradientHeader } from "@/components/GradientHeader";
 import { LecturerImageUpload } from "@/components/LecturerImageUpload";
+import { QualificationsInput } from "@/components/QualificationsInput";
 import { useAuth } from "@/lib/firebase/AuthProvider";
 import { useI18n, useT } from "@/lib/i18n/I18nProvider";
+import {
+  evaluateMyLecturerProfile,
+  fetchMyLecturerProfile,
+  saveMyLecturerProfile,
+  submitMyLecturerProfile,
+  uploadLecturerAsset,
+} from "@/lib/api/lecturers";
+import {
+  emptyLecturerProfile,
+  type LecturerProfile,
+  type LecturerQualification,
+  type LecturerType,
+  type OnboardingMeta,
+  type OnboardingStepKey,
+  type TeachingLevel,
+  type TeachingMethod,
+} from "@/lib/api/types";
 import {
   findDistrict,
   localizedLabel,
@@ -25,23 +43,11 @@ import {
   LECTURER_TYPES,
   TEACHING_LEVELS,
   TEACHING_METHODS,
-  calculateCompletion,
-  emptyLecturerProfile,
-  getLecturerProfile,
-  isProfileSubmittable,
-  saveLecturerProfile,
-  submitProfileForReview,
-  uploadLecturerAsset,
-  type LecturerProfile,
-  type LecturerType,
-  type TeachingLevel,
-  type TeachingMethod,
-} from "@/lib/lecturer/profile";
-import {
-  isOnboardingStepComplete,
-  maxReachableStepIndex,
-  type OnboardingStepKey,
-} from "@/lib/lecturer/onboarding-steps";
+} from "@/app/lecturer/onboarding/constants";
+
+function formatQualification(q: LecturerQualification): string {
+  return [q.title, q.institute, q.year].filter(Boolean).join(" · ");
+}
 
 const STEPS: {
   key: OnboardingStepKey;
@@ -69,6 +75,7 @@ export default function LecturerOnboardingPage() {
   const [error, setError] = useState<string | null>(null);
   const [stepError, setStepError] = useState<string | null>(null);
   const [submitted, setSubmitted] = useState(false);
+  const [onboarding, setOnboarding] = useState<OnboardingMeta | null>(null);
 
   useEffect(() => {
     if (authLoading) return;
@@ -83,13 +90,14 @@ export default function LecturerOnboardingPage() {
     let cancelled = false;
     (async () => {
       try {
-        const existing = await getLecturerProfile(user.uid);
+        const token = await user.getIdToken();
+        const data = await fetchMyLecturerProfile(token);
         if (cancelled) return;
-        const base = existing ?? emptyLecturerProfile(user.uid);
-        // Prefill displayName / email from the user record on first visit.
+        const base = data?.profile ?? emptyLecturerProfile(user.uid);
         if (!base.displayName && userProfile?.name) base.displayName = userProfile.name;
         if (!base.email && userProfile?.email) base.email = userProfile.email;
         setProfile(base);
+        setOnboarding(data?.onboarding ?? null);
         if (base.approvalStatus === "pending" || base.approvalStatus === "approved") {
           setSubmitted(true);
         }
@@ -102,23 +110,33 @@ export default function LecturerOnboardingPage() {
     };
   }, [authLoading, user, userProfile, router]);
 
-  const completion = useMemo(
-    () => (profile ? calculateCompletion(profile) : 0),
-    [profile],
-  );
+  useEffect(() => {
+    if (!user || !profile) return;
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      try {
+        const token = await user.getIdToken();
+        const { onboarding: next } = await evaluateMyLecturerProfile(token, profile);
+        if (!cancelled) setOnboarding(next);
+      } catch {
+        // keep last known onboarding meta
+      }
+    }, 400);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [profile, user]);
+
+  const completion = onboarding?.completion ?? profile?.completion ?? 0;
 
   const step = STEPS[stepIndex]!;
-  const stepKeys = useMemo(() => STEPS.map((s) => s.key), []);
-  const maxReachable = profile
-    ? maxReachableStepIndex(stepKeys, profile)
-    : 0;
-  const currentStepComplete = profile
-    ? isOnboardingStepComplete(step.key, profile)
-    : false;
+  const maxReachable = onboarding?.maxReachableStepIndex ?? 0;
+  const currentStepComplete = onboarding?.steps[step.key] ?? false;
 
   function goToStep(index: number) {
     if (!profile || index < 0 || index >= STEPS.length) return;
-    if (index > maxReachableStepIndex(stepKeys, profile)) return;
+    if (index > maxReachable) return;
     setStepError(null);
     setStepIndex(index);
     if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
@@ -129,8 +147,11 @@ export default function LecturerOnboardingPage() {
     setSaving(true);
     setError(null);
     try {
-      const next = await saveLecturerProfile(user.uid, patch, profile);
+      const token = await user.getIdToken();
+      const { profile: next, onboarding: nextOnboarding } =
+        await saveMyLecturerProfile(token, patch);
       setProfile(next);
+      setOnboarding(nextOnboarding);
       return true;
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not save");
@@ -142,7 +163,7 @@ export default function LecturerOnboardingPage() {
 
   async function handleNext() {
     if (!profile) return;
-    if (!isOnboardingStepComplete(step.key, profile)) {
+    if (!currentStepComplete) {
       setStepError(t("onboard.validation.fillRequired"));
       return;
     }
@@ -157,8 +178,11 @@ export default function LecturerOnboardingPage() {
     setSaving(true);
     setError(null);
     try {
-      const next = await submitProfileForReview(user.uid, profile);
+      const token = await user.getIdToken();
+      const { profile: next, onboarding: nextOnboarding } =
+        await submitMyLecturerProfile(token);
       setProfile(next);
+      setOnboarding(nextOnboarding);
       setSubmitted(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not submit");
@@ -279,6 +303,7 @@ export default function LecturerOnboardingPage() {
             uid={profile.uid}
             value={profile}
             onChange={(patch) => setProfile((p) => (p ? { ...p, ...patch } : p))}
+            onPersist={(patch) => save(patch)}
           />
         )}
         {step.key === "professional" && (
@@ -312,7 +337,12 @@ export default function LecturerOnboardingPage() {
             onChange={(patch) => setProfile((p) => (p ? { ...p, ...patch } : p))}
           />
         )}
-        {step.key === "review" && <ReviewStep value={profile} />}
+        {step.key === "review" && (
+          <ReviewStep
+            value={profile}
+            submittable={onboarding?.submittable ?? false}
+          />
+        )}
 
         <footer className="mt-8 flex flex-col-reverse gap-3 border-t border-ink-100 pt-6 sm:flex-row sm:items-center sm:justify-between">
           <button
@@ -346,7 +376,7 @@ export default function LecturerOnboardingPage() {
               <button
                 type="button"
                 onClick={handleSubmitForReview}
-                disabled={saving || !isProfileSubmittable(profile)}
+                disabled={saving || !onboarding?.submittable}
                 className="btn btn-primary justify-center disabled:opacity-60"
               >
                 {saving ? t("onboard.submitting") : t("onboard.submitReview")}
@@ -367,10 +397,12 @@ function BasicStep({
   uid,
   value,
   onChange,
+  onPersist,
 }: {
   uid: string;
   value: LecturerProfile;
   onChange: (patch: Partial<LecturerProfile>) => void;
+  onPersist: (patch: Partial<LecturerProfile>) => Promise<boolean>;
 }) {
   const t = useT();
   return (
@@ -381,7 +413,7 @@ function BasicStep({
         helper={t("onboard.basic.photo.helper")}
         currentUrl={value.photoURL}
         uploadKey="photo"
-        onChange={(url) => onChange({ photoURL: url })}
+        onChange={(url) => void onPersist({ photoURL: url })}
         previewAspect="square"
         cropPreset="profile"
       />
@@ -391,7 +423,7 @@ function BasicStep({
         helper={t("onboard.basic.cover.helper")}
         currentUrl={value.coverURL}
         uploadKey="cover"
-        onChange={(url) => onChange({ coverURL: url })}
+        onChange={(url) => void onPersist({ coverURL: url })}
         previewAspect="cover"
         cropPreset="cover"
       />
@@ -455,17 +487,20 @@ function ProfessionalStep({
       />
       <Field
         label={t("onboard.prof.experience")}
-        type="number"
-        min={0}
-        max={60}
+        type="text"
+        inputMode="numeric"
+        autoComplete="off"
         value={value.experienceYears ?? ""}
-        onChange={(e) =>
-          onChange({
-            experienceYears: e.target.value === "" ? undefined : Number(e.target.value),
-          })
-        }
+        onChange={(e) => {
+          const digits = e.target.value.replace(/\D/g, "");
+          if (digits === "") {
+            onChange({ experienceYears: undefined });
+            return;
+          }
+          onChange({ experienceYears: Math.min(60, parseInt(digits, 10)) });
+        }}
       />
-      <TagInput
+      <QualificationsInput
         label={t("onboard.prof.qualifications")}
         helper={t("onboard.prof.qualifications.helper")}
         values={value.qualifications}
@@ -612,7 +647,6 @@ function VerificationStep({
         />
       </div>
       <ExtraDocsUpload
-        uid={uid}
         urls={value.extraDocs}
         onChange={(extraDocs) => onChange({ extraDocs })}
       />
@@ -657,10 +691,16 @@ function BankingStep({
   );
 }
 
-function ReviewStep({ value }: { value: LecturerProfile }) {
+function ReviewStep({
+  value,
+  submittable,
+}: {
+  value: LecturerProfile;
+  submittable: boolean;
+}) {
   const t = useT();
   const { locale } = useI18n();
-  const ready = isProfileSubmittable(value);
+  const ready = submittable;
   return (
     <div className="space-y-5">
       <p className="text-sm text-ink-600">{t("onboard.review.intro")}</p>
@@ -688,6 +728,12 @@ function ReviewStep({ value }: { value: LecturerProfile }) {
             value.teachingMethods.join(", "),
           ],
           ["onboard.review.experience", value.experienceYears?.toString()],
+          [
+            "onboard.review.qualifications",
+            value.qualifications.length > 0
+              ? value.qualifications.map(formatQualification).join("; ")
+              : "",
+          ],
           ["onboard.review.bankName", value.bankName],
         ].map(([k, v]) => (
           <li
@@ -979,22 +1025,23 @@ function TagInput({
 
 
 function ExtraDocsUpload({
-  uid,
   urls,
   onChange,
 }: {
-  uid: string;
   urls: string[];
   onChange: (next: string[]) => void;
 }) {
   const t = useT();
+  const { user } = useAuth();
   const ref = useRef<HTMLInputElement | null>(null);
   const [uploading, setUploading] = useState(false);
 
   async function handleFile(file: File) {
+    if (!user) return;
     setUploading(true);
     try {
-      const url = await uploadLecturerAsset(uid, file, "extraDoc");
+      const token = await user.getIdToken();
+      const url = await uploadLecturerAsset(token, "extraDoc", file);
       onChange([...urls, url]);
     } finally {
       setUploading(false);

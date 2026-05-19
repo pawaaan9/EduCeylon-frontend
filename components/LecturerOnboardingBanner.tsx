@@ -3,12 +3,10 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { ArrowRightIcon, CheckCircleIcon } from "@/components/icons";
+import { fetchMyLecturerProfile } from "@/lib/api/lecturers";
+import type { LecturerProfile } from "@/lib/api/types";
 import { useAuth } from "@/lib/firebase/AuthProvider";
 import { useT } from "@/lib/i18n/I18nProvider";
-import {
-  subscribeLecturerProfile,
-  type LecturerProfile,
-} from "@/lib/lecturer/profile";
 
 /**
  * Dashboard prompt for incomplete lecturer profiles.
@@ -22,11 +20,31 @@ export function LecturerOnboardingBanner() {
 
   useEffect(() => {
     if (!user) return;
-    const unsub = subscribeLecturerProfile(user.uid, (p) => {
-      setProfile(p);
-      setLoaded(true);
-    });
-    return () => unsub();
+    let cancelled = false;
+
+    async function load() {
+      if (!user) return;
+      try {
+        const token = await user.getIdToken();
+        const data = await fetchMyLecturerProfile(token);
+        if (!cancelled) {
+          setProfile(data?.profile ?? null);
+          setLoaded(true);
+        }
+      } catch {
+        if (!cancelled) {
+          setProfile(null);
+          setLoaded(true);
+        }
+      }
+    }
+
+    void load();
+    const interval = window.setInterval(() => void load(), 60_000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
   }, [user]);
 
   if (!loaded) return null;
@@ -70,9 +88,7 @@ export function LecturerOnboardingBanner() {
           <h3 className="mt-1 text-lg font-bold text-ink-900">
             {t("onboard.banner.title")}
           </h3>
-          <p className="mt-1 text-sm text-ink-600">
-            {t("onboard.banner.body")}
-          </p>
+          <p className="mt-1 text-sm text-ink-600">{t("onboard.banner.body")}</p>
 
           <div className="mt-4">
             <div className="flex items-center justify-between mb-1.5 text-xs font-medium text-ink-600">

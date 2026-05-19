@@ -100,8 +100,8 @@ export function DashboardShell({
   }, [sections, pathname]);
 
   return (
-    <div className="min-h-screen flex bg-ink-50">
-      <aside className="hidden lg:flex w-72 flex-col border-r border-ink-200 bg-white">
+    <div className="min-h-screen bg-ink-50">
+      <aside className="hidden lg:fixed lg:inset-y-0 lg:left-0 lg:z-40 lg:flex lg:w-72 lg:flex-col border-r border-ink-200 bg-white">
         <div className="h-16 border-b border-ink-200 flex items-center px-5">
           <Logo size="sm" />
         </div>
@@ -186,7 +186,7 @@ export function DashboardShell({
         </div>
       )}
 
-      <div className="flex-1 flex flex-col min-w-0">
+      <div className="flex min-h-screen flex-col min-w-0 lg:pl-72">
         <header className="sticky top-0 z-30 h-16 shrink-0 border-b border-ink-200 bg-white">
           <div className="h-full px-4 sm:px-6 lg:px-8 flex items-center gap-4">
             <div className="flex items-center gap-3 min-w-0 flex-1">

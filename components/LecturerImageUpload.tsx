@@ -9,7 +9,8 @@ import {
   IMAGE_CROP_PRESETS,
   type ImageCropPresetKey,
 } from "@/lib/image/crop-presets";
-import { uploadLecturerAsset, type UploadKey } from "@/lib/lecturer/profile";
+import { uploadLecturerAsset, type UploadKey } from "@/lib/api/lecturers";
+import { useAuth } from "@/lib/firebase/AuthProvider";
 
 type PreviewAspect = "square" | "cover";
 
@@ -33,12 +34,13 @@ export function LecturerImageUpload({
   helper?: string;
   currentUrl?: string;
   uploadKey: UploadKey;
-  onChange: (url: string) => void;
+  onChange: (url: string) => void | Promise<void>;
   previewAspect: PreviewAspect;
   /** When set, opens a crop step before upload. */
   cropPreset?: ImageCropPresetKey;
 }) {
   const t = useT();
+  const { user } = useAuth();
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [uploading, setUploading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -71,10 +73,15 @@ export function LecturerImageUpload({
   }
 
   async function uploadFile(file: File) {
+    if (!user) {
+      setErr("You must be signed in to upload.");
+      return;
+    }
     setUploading(true);
     try {
-      const url = await uploadLecturerAsset(uid, file, uploadKey);
-      onChange(url);
+      const token = await user.getIdToken();
+      const url = await uploadLecturerAsset(token, uploadKey, file);
+      await onChange(url);
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Upload failed");
     } finally {
