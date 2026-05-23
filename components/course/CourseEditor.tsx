@@ -13,6 +13,7 @@ import {
 import { CourseAssetUpload } from "@/components/course/CourseAssetUpload";
 import { CourseTagInput } from "@/components/course/CourseTagInput";
 import { ModulesEditor } from "@/components/course/ModulesEditor";
+import { WeeklyScheduleEditor } from "@/components/course/WeeklyScheduleEditor";
 import {
   createMyCourse,
   deleteMyCourse,
@@ -24,7 +25,6 @@ import {
 import {
   COURSE_ACCESS_OPTIONS,
   COURSE_LANGUAGE_OPTIONS,
-  COURSE_TYPE_OPTIONS,
   COURSE_VISIBILITY_OPTIONS,
   MAIN_CATEGORY_OPTIONS,
   TEACHING_LEVEL_OPTIONS,
@@ -57,7 +57,16 @@ type PendingAssets = {
   cover?: File;
 };
 
-export function CourseEditor({ courseId: initialCourseId }: { courseId?: string }) {
+const CREATE_DRAFT_STORAGE_KEY = "educeylon:lecturer-create-draft-id";
+
+export function CourseEditor({
+  courseId: initialCourseId,
+  startNew,
+}: {
+  courseId?: string;
+  /** When true, start a blank course (ignore any saved in-tab draft). */
+  startNew?: boolean;
+}) {
   const t = useT();
   const router = useRouter();
   const { user, loading: authLoading } = useAuth();
@@ -77,17 +86,44 @@ export function CourseEditor({ courseId: initialCourseId }: { courseId?: string 
   const savedSnapshotRef = useRef<string>("");
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inflightRef = useRef(false);
+  const draftSavingRef = useRef(false);
+  const persistedIdRef = useRef<string | null>(initialCourseId ?? null);
+  const pendingAssetsRef = useRef<PendingAssets>({});
+
+  useEffect(() => {
+    persistedIdRef.current = persistedId;
+  }, [persistedId]);
+
+  useEffect(() => {
+    pendingAssetsRef.current = pendingAssets;
+  }, [pendingAssets]);
 
   const loginNext = persistedId
     ? `/lecturer/create?id=${encodeURIComponent(persistedId)}`
     : "/lecturer/create";
 
-  // Sync when opening an existing course via ?id= in the URL.
+  // Resolve course id: URL param, in-tab draft, or start fresh.
   useEffect(() => {
-    if (initialCourseId) {
-      setPersistedId(initialCourseId);
+    if (startNew) {
+      sessionStorage.removeItem(CREATE_DRAFT_STORAGE_KEY);
+      setPersistedId(null);
+      persistedIdRef.current = null;
+      setCourse(null);
+      savedSnapshotRef.current = "";
+      return;
     }
-  }, [initialCourseId]);
+    if (initialCourseId) {
+      sessionStorage.setItem(CREATE_DRAFT_STORAGE_KEY, initialCourseId);
+      setPersistedId(initialCourseId);
+      persistedIdRef.current = initialCourseId;
+      return;
+    }
+    const stored = sessionStorage.getItem(CREATE_DRAFT_STORAGE_KEY);
+    if (stored) {
+      setPersistedId(stored);
+      persistedIdRef.current = stored;
+    }
+  }, [initialCourseId, startNew]);
 
   // Load existing course from Firestore.
   useEffect(() => {
@@ -97,6 +133,8 @@ export function CourseEditor({ courseId: initialCourseId }: { courseId?: string 
       return;
     }
     if (!persistedId) return;
+    // Already loaded for this id (e.g. right after create) — skip refetch.
+    if (course?.id === persistedId) return;
 
     let alive = true;
     void (async () => {
@@ -114,7 +152,7 @@ export function CourseEditor({ courseId: initialCourseId }: { courseId?: string 
     return () => {
       alive = false;
     };
-  }, [authLoading, user, persistedId, router, loginNext]);
+  }, [authLoading, user, persistedId, router, loginNext, course?.id]);
 
   // New course: local draft only (nothing written to DB until save/publish).
   useEffect(() => {
@@ -161,24 +199,21 @@ export function CourseEditor({ courseId: initialCourseId }: { courseId?: string 
   const ensurePersisted = useCallback(
     async (data: LecturerCourse): Promise<string> => {
       if (!user) throw new Error("Not signed in");
-      if (persistedId) return persistedId;
+      if (persistedIdRef.current) return persistedIdRef.current;
 
       const token = await user.getIdToken();
-      const assetsSnapshot = { ...pendingAssets };
+      const assetsSnapshot = { ...pendingAssetsRef.current };
       const created = await createMyCourse(token, editablePatch(data));
       await flushPendingAssets(created.id, assetsSnapshot);
-      setPersistedId(created.id);
       const merged = await getMyCourse(token, created.id);
-      setCourse(merged);
       savedSnapshotRef.current = snapshot(merged);
-      // Update URL without Next.js soft navigation (avoids "Failed to fetch" RSC errors).
-      if (typeof window !== "undefined") {
-        const url = `/lecturer/create?id=${encodeURIComponent(created.id)}`;
-        window.history.replaceState(window.history.state, "", url);
-      }
+      setCourse(merged);
+      persistedIdRef.current = created.id;
+      setPersistedId(created.id);
+      sessionStorage.setItem(CREATE_DRAFT_STORAGE_KEY, created.id);
       return created.id;
     },
-    [user, persistedId, pendingAssets, flushPendingAssets],
+    [user, flushPendingAssets],
   );
 
   const persist = useCallback(
@@ -228,30 +263,30 @@ export function CourseEditor({ courseId: initialCourseId }: { courseId?: string 
   }
 
   async function handleSaveDraft() {
-    if (!course || !user) return;
+    if (!course || !user || draftSavingRef.current) return;
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-    const next: LecturerCourse = {
+
+    const payload: LecturerCourse = {
       ...course,
       status: "draft",
-      visibility: "draft",
     };
-    setCourse(next);
+
+    draftSavingRef.current = true;
     setSavingStatus("saving");
     setError(null);
     try {
       const token = await user.getIdToken();
-      const id = persistedId ?? (await ensurePersisted(next));
-      if (persistedId) {
-        const result = await updateMyCourse(token, id, editablePatch(next));
-        savedSnapshotRef.current = snapshot(result);
-        setCourse((prev) =>
-          prev ? { ...prev, updatedAt: result.updatedAt } : prev,
-        );
-      }
+      const id =
+        persistedIdRef.current ?? (await ensurePersisted(payload));
+      const result = await updateMyCourse(token, id, editablePatch(payload));
+      savedSnapshotRef.current = snapshot(result);
+      setCourse(result);
       setSavingStatus("saved");
     } catch (e) {
       setSavingStatus("error");
       setError(e instanceof Error ? e.message : "Could not save draft");
+    } finally {
+      draftSavingRef.current = false;
     }
   }
 
@@ -265,10 +300,8 @@ export function CourseEditor({ courseId: initialCourseId }: { courseId?: string 
     setError(null);
     try {
       const token = await user.getIdToken();
-      const id = persistedId ?? (await ensurePersisted(course));
-      if (persistedId) {
-        await updateMyCourse(token, id, editablePatch(course));
-      }
+      const id = persistedIdRef.current ?? (await ensurePersisted(course));
+      await updateMyCourse(token, id, editablePatch(course));
       const result = await publishMyCourse(token, id);
       setCourse(result);
       savedSnapshotRef.current = snapshot(result);
@@ -281,6 +314,7 @@ export function CourseEditor({ courseId: initialCourseId }: { courseId?: string 
 
   async function handleDelete() {
     setDeleteOpen(false);
+    sessionStorage.removeItem(CREATE_DRAFT_STORAGE_KEY);
     if (!persistedId) {
       router.replace("/lecturer/courses");
       return;
@@ -308,8 +342,8 @@ export function CourseEditor({ courseId: initialCourseId }: { courseId?: string 
   }, [course, pendingAssets.thumbnail]);
 
   const goToStep = useCallback(
-    (targetIdx: number) => {
-      if (!course) return;
+    async (targetIdx: number) => {
+      if (!course || !user) return;
       if (targetIdx < stepIdx) {
         setStepIdx(targetIdx);
         return;
@@ -317,10 +351,34 @@ export function CourseEditor({ courseId: initialCourseId }: { courseId?: string 
       if (stepIdx === 0 && targetIdx > 0 && !basicsReady) {
         return;
       }
+      if (
+        stepIdx === 0 &&
+        targetIdx > 0 &&
+        !persistedIdRef.current &&
+        !draftSavingRef.current
+      ) {
+        setSavingStatus("saving");
+        setError(null);
+        try {
+          await ensurePersisted(course);
+          setSavingStatus("saved");
+        } catch (e) {
+          setSavingStatus("error");
+          setError(
+            e instanceof Error ? e.message : "Save the draft before continuing",
+          );
+          return;
+        }
+      }
       setStepIdx(targetIdx);
     },
-    [course, stepIdx, basicsReady],
+    [course, user, stepIdx, basicsReady, ensurePersisted],
   );
+
+  async function handleNext() {
+    if (stepIdx >= STEPS.length - 1) return;
+    await goToStep(stepIdx + 1);
+  }
 
   const patchCourse = useCallback((patch: Partial<LecturerCourse>) => {
     setCourse((prev) => (prev ? { ...prev, ...patch } : prev));
@@ -357,8 +415,8 @@ export function CourseEditor({ courseId: initialCourseId }: { courseId?: string 
             <button
               type="button"
               onClick={() => void handleSaveDraft()}
-              disabled={publishing}
-              className="btn border border-white/30 text-white hover:bg-white/10"
+              disabled={publishing || savingStatus === "saving"}
+              className="btn border border-white/30 text-white hover:bg-white/10 disabled:opacity-60"
             >
               {savingStatus === "saving"
                 ? t("lecturer.create.savingDraft")
@@ -404,7 +462,7 @@ export function CourseEditor({ courseId: initialCourseId }: { courseId?: string 
               <li key={s.key}>
                 <button
                   type="button"
-                  onClick={() => goToStep(i)}
+                  onClick={() => void goToStep(i)}
                   aria-current={active ? "step" : undefined}
                   className={`flex w-full flex-col items-center gap-1 rounded-lg px-0.5 py-2 transition-colors ${
                     active
@@ -477,7 +535,7 @@ export function CourseEditor({ courseId: initialCourseId }: { courseId?: string 
         <footer className="mt-8 flex flex-col-reverse gap-3 border-t border-ink-100 pt-6 sm:flex-row sm:items-center sm:justify-between">
           <button
             type="button"
-            onClick={() => goToStep(Math.max(0, stepIdx - 1))}
+            onClick={() => void goToStep(Math.max(0, stepIdx - 1))}
             disabled={stepIdx === 0}
             className="btn btn-ghost disabled:opacity-50"
           >
@@ -502,8 +560,10 @@ export function CourseEditor({ courseId: initialCourseId }: { courseId?: string 
             {stepIdx < STEPS.length - 1 ? (
               <button
                 type="button"
-                onClick={() => goToStep(Math.min(STEPS.length - 1, stepIdx + 1))}
-                disabled={stepIdx === 0 && !basicsReady}
+                onClick={() => void handleNext()}
+                disabled={
+                  (stepIdx === 0 && !basicsReady) || savingStatus === "saving"
+                }
                 className="btn btn-primary disabled:opacity-50"
               >
                 {t("action.next")} <ArrowRightIcon className="h-4 w-4" />
@@ -650,12 +710,12 @@ function SaveIndicator({
   isLocalDraft: boolean;
   t: (key: string) => string;
 }) {
-  if (isLocalDraft) {
-    return <span>{t("lecturer.create.localDraft")}</span>;
-  }
   if (status === "saving") return <span>{t("lecturer.create.autoSaving")}</span>;
   if (status === "error")
     return <span className="text-rose-100">Auto-save failed</span>;
+  if (isLocalDraft) {
+    return <span>{t("lecturer.create.localDraft")}</span>;
+  }
   if (status === "saved" && !dirty) return <span>{t("lecturer.create.autoSaved")}</span>;
   if (dirty) return <span>{t("lecturer.create.unsaved")}</span>;
   return null;
@@ -678,129 +738,194 @@ function BasicsStep({
 }) {
   const t = useT();
   return (
-    <div className="grid lg:grid-cols-3 gap-6">
-      <div className="lg:col-span-2 grid gap-5">
-        <h2 className="text-lg font-semibold text-ink-900">
-          {t("lecturer.create.basics")}
-        </h2>
+    <div className="grid gap-6">
+      <CourseFormatChooser
+        value={course.courseType}
+        onChange={(v) => onChange({ courseType: v })}
+      />
 
-        <Labeled label={t("lecturer.create.title.label")} required>
-          <input
-            className="input-base"
-            value={course.title}
-            placeholder="e.g. A/L Combined Maths 2026"
-            onChange={(e) => onChange({ title: e.target.value })}
-          />
-        </Labeled>
+      <div className="grid lg:grid-cols-3 gap-6">
+        <div className="lg:col-span-2 grid gap-5">
+          <h2 className="text-lg font-semibold text-ink-900">
+            {t("lecturer.create.basics")}
+          </h2>
 
-        <Labeled label={t("lecturer.create.subtitle.label")}>
-          <input
-            className="input-base"
-            value={course.subtitle ?? ""}
-            placeholder="A short one-liner about your course"
-            onChange={(e) => onChange({ subtitle: e.target.value })}
-          />
-        </Labeled>
-
-        <Labeled label={t("lecturer.create.description.label")} required>
-          <textarea
-            className="textarea-base min-h-[140px]"
-            value={course.description ?? ""}
-            placeholder="Describe what students will learn in this course…"
-            onChange={(e) => onChange({ description: e.target.value })}
-          />
-        </Labeled>
-
-        <div className="grid sm:grid-cols-2 gap-4">
-          <SelectField
-            label={t("lecturer.create.category")}
-            required
-            value={course.mainCategory ?? ""}
-            onChange={(v) => onChange({ mainCategory: v || undefined })}
-          >
-            <option value="">—</option>
-            {MAIN_CATEGORY_OPTIONS.map((c) => (
-              <option key={c} value={c}>
-                {t(`category.${c}`)}
-              </option>
-            ))}
-          </SelectField>
-          <Labeled label={t("lecturer.create.subCategory")}>
+          <Labeled label={t("lecturer.create.title.label")} required>
             <input
               className="input-base"
-              value={course.subCategory ?? ""}
-              placeholder="e.g. Combined Maths"
-              onChange={(e) => onChange({ subCategory: e.target.value })}
+              value={course.title}
+              placeholder="e.g. A/L Combined Maths 2026"
+              onChange={(e) => onChange({ title: e.target.value })}
             />
           </Labeled>
-          <SelectField
-            label={t("lecturer.create.level")}
-            required
-            value={course.teachingLevel ?? ""}
-            onChange={(v) =>
-              onChange({
-                teachingLevel: (v || undefined) as CourseTeachingLevel | undefined,
-              })
-            }
-          >
-            <option value="">—</option>
-            {TEACHING_LEVEL_OPTIONS.map((lvl) => (
-              <option key={lvl} value={lvl}>
-                {t(`onboard.levels.${lvl}`)}
-              </option>
-            ))}
-          </SelectField>
-          <SelectField
-            label={t("lecturer.create.language")}
-            required
-            value={course.language ?? ""}
-            onChange={(v) =>
-              onChange({ language: (v || undefined) as CourseLanguage | undefined })
-            }
-          >
-            <option value="">—</option>
-            {COURSE_LANGUAGE_OPTIONS.map((l) => (
-              <option key={l} value={l}>
-                {t(`onboard.languages.${l}`)}
-              </option>
-            ))}
-          </SelectField>
+
+          <Labeled label={t("lecturer.create.subtitle.label")}>
+            <input
+              className="input-base"
+              value={course.subtitle ?? ""}
+              placeholder="A short one-liner about your course"
+              onChange={(e) => onChange({ subtitle: e.target.value })}
+            />
+          </Labeled>
+
+          <Labeled label={t("lecturer.create.description.label")} required>
+            <textarea
+              className="textarea-base min-h-[140px]"
+              value={course.description ?? ""}
+              placeholder="Describe what students will learn in this course…"
+              onChange={(e) => onChange({ description: e.target.value })}
+            />
+          </Labeled>
+
+          <div className="grid sm:grid-cols-2 gap-4">
+            <SelectField
+              label={t("lecturer.create.category")}
+              required
+              value={course.mainCategory ?? ""}
+              onChange={(v) => onChange({ mainCategory: v || undefined })}
+            >
+              <option value="">—</option>
+              {MAIN_CATEGORY_OPTIONS.map((c) => (
+                <option key={c} value={c}>
+                  {t(`category.${c}`)}
+                </option>
+              ))}
+            </SelectField>
+            <Labeled label={t("lecturer.create.subCategory")}>
+              <input
+                className="input-base"
+                value={course.subCategory ?? ""}
+                placeholder="e.g. Combined Maths"
+                onChange={(e) => onChange({ subCategory: e.target.value })}
+              />
+            </Labeled>
+            <SelectField
+              label={t("lecturer.create.level")}
+              required
+              value={course.teachingLevel ?? ""}
+              onChange={(v) =>
+                onChange({
+                  teachingLevel: (v || undefined) as CourseTeachingLevel | undefined,
+                })
+              }
+            >
+              <option value="">—</option>
+              {TEACHING_LEVEL_OPTIONS.map((lvl) => (
+                <option key={lvl} value={lvl}>
+                  {t(`onboard.levels.${lvl}`)}
+                </option>
+              ))}
+            </SelectField>
+            <SelectField
+              label={t("lecturer.create.language")}
+              required
+              value={course.language ?? ""}
+              onChange={(v) =>
+                onChange({ language: (v || undefined) as CourseLanguage | undefined })
+              }
+            >
+              <option value="">—</option>
+              {COURSE_LANGUAGE_OPTIONS.map((l) => (
+                <option key={l} value={l}>
+                  {t(`onboard.languages.${l}`)}
+                </option>
+              ))}
+            </SelectField>
+          </div>
+
+          <Labeled label={t("lecturer.create.tags")}>
+            <CourseTagInput
+              values={course.tags}
+              onChange={(tags) => onChange({ tags })}
+            />
+          </Labeled>
         </div>
 
-        <Labeled label={t("lecturer.create.tags")}>
-          <CourseTagInput
-            values={course.tags}
-            onChange={(tags) => onChange({ tags })}
-          />
-        </Labeled>
-      </div>
-
-      <aside className="grid gap-5">
-        <div>
+        <aside className="grid gap-5">
+          <div>
+            <CourseAssetUpload
+              courseId={uploadCourseId}
+              kind="thumbnail"
+              label={`${t("lecturer.create.thumbnail")} *`}
+              helper="PNG / JPG up to 5MB"
+              currentUrl={course.thumbnailURL}
+              onChange={(url) => onChange({ thumbnailURL: url })}
+              onPickFile={(file) => onPendingAsset("thumbnail", file)}
+              onClearPending={() => onClearPendingAsset("thumbnail")}
+              aspect="cover"
+            />
+          </div>
           <CourseAssetUpload
             courseId={uploadCourseId}
-            kind="thumbnail"
-            label={`${t("lecturer.create.thumbnail")} *`}
-            helper="PNG / JPG up to 5MB"
-            currentUrl={course.thumbnailURL}
-            onChange={(url) => onChange({ thumbnailURL: url })}
-            onPickFile={(file) => onPendingAsset("thumbnail", file)}
-            onClearPending={() => onClearPendingAsset("thumbnail")}
-            aspect="cover"
+            kind="cover"
+            label={t("lecturer.create.cover")}
+            helper="Wide banner used on course page"
+            currentUrl={course.coverURL}
+            onChange={(url) => onChange({ coverURL: url })}
+            onPickFile={(file) => onPendingAsset("cover", file)}
+            onClearPending={() => onClearPendingAsset("cover")}
+            aspect="wide"
           />
-        </div>
-        <CourseAssetUpload
-          courseId={uploadCourseId}
-          kind="cover"
-          label={t("lecturer.create.cover")}
-          helper="Wide banner used on course page"
-          currentUrl={course.coverURL}
-          onChange={(url) => onChange({ coverURL: url })}
-          onPickFile={(file) => onPendingAsset("cover", file)}
-          onClearPending={() => onClearPendingAsset("cover")}
-          aspect="wide"
-        />
-      </aside>
+        </aside>
+      </div>
+    </div>
+  );
+}
+
+function CourseFormatChooser({
+  value,
+  onChange,
+}: {
+  value: CourseType;
+  onChange: (v: CourseType) => void;
+}) {
+  const t = useT();
+  const options: { value: CourseType; descKey: string }[] = [
+    { value: "recorded", descKey: "lecturer.create.type.recorded.desc" },
+    { value: "live", descKey: "lecturer.create.type.live.desc" },
+    { value: "hybrid", descKey: "lecturer.create.type.hybrid.desc" },
+  ];
+  return (
+    <div className="rounded-2xl border border-brand-200 bg-brand-50/40 p-5 sm:p-6">
+      <div className="mb-3">
+        <h2 className="text-base sm:text-lg font-semibold text-ink-900">
+          {t("lecturer.create.format.title")}
+        </h2>
+        <p className="mt-0.5 text-sm text-ink-600">
+          {t("lecturer.create.format.subtitle")}
+        </p>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-3">
+        {options.map((o) => {
+          const on = value === o.value;
+          return (
+            <button
+              key={o.value}
+              type="button"
+              onClick={() => onChange(o.value)}
+              className={`rounded-xl border-2 p-4 text-left transition-all ${
+                on
+                  ? "border-brand-600 bg-white shadow-sm"
+                  : "border-ink-200 bg-white hover:border-brand-300"
+              }`}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-sm font-semibold text-ink-900">
+                  {t(`lecturer.create.type.${o.value}`)}
+                </span>
+                {on && (
+                  <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-brand-600 text-white">
+                    <CheckIcon className="h-3 w-3" />
+                  </span>
+                )}
+              </div>
+              <p className="mt-1 text-xs text-ink-500 leading-relaxed">
+                {t(o.descKey)}
+              </p>
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -824,15 +949,17 @@ function TypeStep({
         </p>
       </div>
 
-      <RadioCardGroup
-        label={t("lecturer.create.type.label")}
-        value={course.courseType}
-        onChange={(v) => onChange({ courseType: v as CourseType })}
-        options={COURSE_TYPE_OPTIONS.map((v) => ({
-          value: v,
-          label: t(`lecturer.create.type.${v}`),
-        }))}
-      />
+      <div className="rounded-xl border border-ink-200 bg-ink-50/40 p-4 text-sm text-ink-600">
+        <span className="text-xs font-semibold uppercase tracking-wide text-ink-500">
+          {t("lecturer.create.type.label")}
+        </span>
+        <div className="mt-1 text-ink-900 font-medium">
+          {t(`lecturer.create.type.${course.courseType}`)}
+        </div>
+        <p className="mt-1 text-xs text-ink-500">
+          {t(`lecturer.create.type.${course.courseType}.desc`)}
+        </p>
+      </div>
 
       <RadioCardGroup
         label={t("lecturer.create.visibility.label")}
@@ -867,26 +994,70 @@ function ContentStep({
   uploadCourseId: string | null;
 }) {
   const t = useT();
+  const showModules =
+    course.courseType === "recorded" || course.courseType === "hybrid";
+  const showSchedule =
+    course.courseType === "live" || course.courseType === "hybrid";
+
+  const titleKey =
+    course.courseType === "live"
+      ? "lecturer.create.content.schedule.title"
+      : course.courseType === "hybrid"
+        ? "lecturer.create.content.hybrid.title"
+        : "lecturer.create.content.title";
+  const subtitleKey =
+    course.courseType === "live"
+      ? "lecturer.create.content.schedule.subtitle"
+      : course.courseType === "hybrid"
+        ? "lecturer.create.content.hybrid.subtitle"
+        : "lecturer.create.content.subtitle";
+
   return (
     <div className="grid gap-5">
       <div>
-        <h2 className="text-lg font-semibold text-ink-900">
-          {t("lecturer.create.content.title")}
-        </h2>
-        <p className="mt-1 text-sm text-ink-500">
-          {t("lecturer.create.content.subtitle")}
-        </p>
+        <h2 className="text-lg font-semibold text-ink-900">{t(titleKey)}</h2>
+        <p className="mt-1 text-sm text-ink-500">{t(subtitleKey)}</p>
       </div>
-      {!uploadCourseId && (
+
+      {showSchedule && !uploadCourseId && (
         <p className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
           {t("lecturer.create.saveBeforeUpload")}
         </p>
       )}
-      <ModulesEditor
-        courseId={uploadCourseId}
-        modules={course.modules}
-        onChange={(modules) => onChange({ modules })}
-      />
+
+      {showSchedule && (
+        <section className="grid gap-3">
+          {course.courseType === "hybrid" && (
+            <h3 className="text-sm font-semibold uppercase tracking-wide text-ink-500">
+              {t("lecturer.create.schedule.title")}
+            </h3>
+          )}
+          <WeeklyScheduleEditor
+            slots={course.weeklySchedule ?? []}
+            onChange={(weeklySchedule) => onChange({ weeklySchedule })}
+          />
+        </section>
+      )}
+
+      {showModules && (
+        <section className="grid gap-3">
+          {course.courseType === "hybrid" && (
+            <h3 className="mt-4 text-sm font-semibold uppercase tracking-wide text-ink-500">
+              {t("lecturer.create.content.modules.title")}
+            </h3>
+          )}
+          {!uploadCourseId && !showSchedule && (
+            <p className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+              {t("lecturer.create.saveBeforeUpload")}
+            </p>
+          )}
+          <ModulesEditor
+            courseId={uploadCourseId}
+            modules={course.modules}
+            onChange={(modules) => onChange({ modules })}
+          />
+        </section>
+      )}
     </div>
   );
 }
@@ -972,6 +1143,11 @@ function ReviewStep({
     (acc, m) => acc + m.lessons.length,
     0,
   );
+  const slotCount = course.weeklySchedule?.length ?? 0;
+  const showModulesRow =
+    course.courseType === "recorded" || course.courseType === "hybrid";
+  const showScheduleRow =
+    course.courseType === "live" || course.courseType === "hybrid";
   return (
     <div className="grid gap-5">
       <div>
@@ -992,7 +1168,22 @@ function ReviewStep({
         <Row label={t("lecturer.create.visibility.label")} value={t(`lecturer.create.visibility.${course.visibility}`)} />
         <Row label={t("lecturer.create.access.label")} value={t(`lecturer.create.access.${course.accessType}`)} />
         <Row label={t("lecturer.create.price")} value={course.accessType === "paid" && course.price ? `LKR ${course.price.toLocaleString()}` : t("lecturer.create.access.free")} />
-        <Row label={t("lecturer.create.content.title")} value={`${course.modules.length} ${t("lecturer.courses.modules")} · ${totalLessons} ${t("lecturer.courses.lessons")}`} />
+        {showModulesRow && (
+          <Row
+            label={t("lecturer.create.content.modules.title")}
+            value={`${course.modules.length} ${t("lecturer.courses.modules")} · ${totalLessons} ${t("lecturer.courses.lessons")}`}
+          />
+        )}
+        {showScheduleRow && (
+          <Row
+            label={t("lecturer.create.schedule.title")}
+            value={
+              slotCount === 0
+                ? t("lecturer.create.schedule.empty")
+                : `${slotCount} ${t("lecturer.create.schedule.slots")}`
+            }
+          />
+        )}
       </dl>
     </div>
   );
@@ -1069,10 +1260,12 @@ function RadioCardGroup({
   onChange: (v: string) => void;
   options: { value: string; label: string }[];
 }) {
+  const cols =
+    options.length <= 2 ? "sm:grid-cols-2" : "sm:grid-cols-3";
   return (
     <div>
       <div className="text-sm font-medium text-ink-700 mb-2">{label}</div>
-      <div className="grid gap-3 sm:grid-cols-3">
+      <div className={`grid gap-3 ${cols}`}>
         {options.map((o) => {
           const on = value === o.value;
           return (

@@ -7,7 +7,8 @@ import { CourseEditor } from "@/components/course/CourseEditor";
 function CreateCourseContent() {
   const searchParams = useSearchParams();
   const courseId = searchParams.get("id") ?? undefined;
-  return <CourseEditor courseId={courseId} />;
+  const startNew = searchParams.get("new") === "1";
+  return <CourseEditor courseId={courseId} startNew={startNew} />;
 }
 
 export default function CreateCoursePage() {

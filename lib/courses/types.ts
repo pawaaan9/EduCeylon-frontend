@@ -2,7 +2,7 @@
 
 export type CourseStatus = "draft" | "pending" | "published" | "archived";
 
-export type CourseVisibility = "public" | "private" | "draft";
+export type CourseVisibility = "draft" | "publish";
 
 export type CourseAccessType = "free" | "paid";
 
@@ -60,6 +60,38 @@ export type CourseModule = {
   lessons: Lesson[];
 };
 
+export type WeeklyDay =
+  | "monday"
+  | "tuesday"
+  | "wednesday"
+  | "thursday"
+  | "friday"
+  | "saturday"
+  | "sunday";
+
+export const WEEKLY_DAY_OPTIONS: WeeklyDay[] = [
+  "monday",
+  "tuesday",
+  "wednesday",
+  "thursday",
+  "friday",
+  "saturday",
+  "sunday",
+];
+
+export type WeeklyScheduleSlot = {
+  id: string;
+  day: WeeklyDay;
+  /** 24h "HH:MM" */
+  startTime: string;
+  /** 24h "HH:MM" */
+  endTime: string;
+  /** e.g. "Theory class", "Paper class" */
+  title: string;
+  description?: string;
+  meetingURL?: string;
+};
+
 export type LecturerCourse = {
   id: string;
   lecturerId: string;
@@ -84,6 +116,8 @@ export type LecturerCourse = {
   coverURL?: string;
 
   modules: CourseModule[];
+  /** Weekly recurring schedule (live / hybrid courses). */
+  weeklySchedule?: WeeklyScheduleSlot[];
 
   price?: number;
   discountPrice?: number;
@@ -125,10 +159,19 @@ export const COURSE_TYPE_OPTIONS: CourseType[] = [
 ];
 
 export const COURSE_VISIBILITY_OPTIONS: CourseVisibility[] = [
-  "public",
-  "private",
   "draft",
+  "publish",
 ];
+
+/** Map legacy Firestore values to the current draft / publish model. */
+export function normalizeVisibility(value: unknown): CourseVisibility {
+  if (value === "publish" || value === "public") return "publish";
+  return "draft";
+}
+
+export function isPublishedVisibility(value: unknown): boolean {
+  return value === "publish" || value === "public";
+}
 
 export const COURSE_ACCESS_OPTIONS: CourseAccessType[] = ["free", "paid"];
 
@@ -164,6 +207,7 @@ export function emptyCourse(uid: string): Omit<LecturerCourse, "id"> {
     visibility: "draft",
     accessType: "free",
     modules: [],
+    weeklySchedule: [],
     status: "draft",
   };
 }

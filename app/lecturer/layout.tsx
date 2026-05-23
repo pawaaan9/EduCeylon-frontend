@@ -37,7 +37,7 @@ export default function LecturerLayout({
           exact: true,
         },
         {
-          href: "/lecturer/create",
+          href: "/lecturer/create?new=1",
           label: t("lecturer.nav.create"),
           icon: PlusIcon,
           alsoActiveWhen: (pathname) => pathname.startsWith("/lecturer/create"),

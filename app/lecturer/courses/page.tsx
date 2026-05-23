@@ -61,7 +61,7 @@ export default function LecturerCoursesPage() {
         subtitle={t("lecturer.courses.subtitle")}
         actions={
           <Link
-            href="/lecturer/create"
+            href="/lecturer/create?new=1"
             className="btn bg-white text-brand-700 hover:bg-white/90"
           >
             <PlusIcon className="h-4 w-4" /> {t("lecturer.courses.new")}
@@ -177,7 +177,7 @@ function EmptyState() {
       <p className="mt-1 text-sm text-ink-500 max-w-md mx-auto">
         {t("lecturer.courses.empty.subtitle")}
       </p>
-      <Link href="/lecturer/create" className="btn btn-primary mt-6 inline-flex">
+      <Link href="/lecturer/create?new=1" className="btn btn-primary mt-6 inline-flex">
         <PlusIcon className="h-4 w-4" /> {t("lecturer.courses.create")}
       </Link>
     </div>

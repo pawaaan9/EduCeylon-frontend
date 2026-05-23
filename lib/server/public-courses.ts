@@ -3,6 +3,7 @@ import "server-only";
 import { resolveCourseSlug } from "@/lib/courses/slug";
 import {
   MAIN_CATEGORY_OPTIONS,
+  isPublishedVisibility,
   type CourseModule,
   type CourseTeachingLevel,
   type LecturerCourse,
@@ -105,7 +106,7 @@ export async function listPublishedCoursesRaw(): Promise<LecturerCourse[]> {
 
   return snap.docs
     .map((d) => normalizeCourse(d.id, d.data() as Record<string, unknown>))
-    .filter((c) => c.visibility === "public" && c.title.trim().length > 0)
+    .filter((c) => isPublishedVisibility(c.visibility) && c.title.trim().length > 0)
     .sort((a, b) =>
       (b.publishedAt ?? b.updatedAt ?? "").localeCompare(
         a.publishedAt ?? a.updatedAt ?? "",
@@ -172,7 +173,7 @@ export async function listPublishedCoursesByLecturer(
 
   return snap.docs
     .map((d) => normalizeCourse(d.id, d.data() as Record<string, unknown>))
-    .filter((c) => c.visibility === "public" && c.title.trim().length > 0)
+    .filter((c) => isPublishedVisibility(c.visibility) && c.title.trim().length > 0)
     .sort((a, b) =>
       (b.publishedAt ?? b.updatedAt ?? "").localeCompare(
         a.publishedAt ?? a.updatedAt ?? "",

@@ -37,7 +37,7 @@ export default function LecturerDashboardPage() {
         title={`${t("dashboard.welcome")}, ${greetingName}`}
         subtitle={t("lecturer.dashboard.subtitle")}
         actions={
-          <Link href="/lecturer/create" className="btn bg-white text-brand-700 hover:bg-white/90">
+          <Link href="/lecturer/create?new=1" className="btn bg-white text-brand-700 hover:bg-white/90">
             <PlusIcon className="h-4 w-4" /> New course
           </Link>
         }

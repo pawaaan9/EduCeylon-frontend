@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { FieldValue } from "firebase-admin/firestore";
 import { getAdmin, getStorageBucketName } from "./firebase-admin";
 import { coursePublicSlug } from "@/lib/courses/slug";
-import type { LecturerCourse } from "@/lib/courses/types";
+import { normalizeVisibility, type LecturerCourse } from "@/lib/courses/types";
 
 export const LECTURER_COURSES = "lecturerCourses";
 
@@ -48,14 +48,16 @@ export function normalizeCourse(id: string, data: Record<string, unknown>): Lect
     tags: Array.isArray(data.tags) ? (data.tags as string[]) : [],
     courseType:
       (data.courseType as LecturerCourse["courseType"]) ?? "recorded",
-    visibility:
-      (data.visibility as LecturerCourse["visibility"]) ?? "draft",
+    visibility: normalizeVisibility(data.visibility),
     accessType:
       (data.accessType as LecturerCourse["accessType"]) ?? "free",
     thumbnailURL: (data.thumbnailURL as string | undefined) ?? undefined,
     coverURL: (data.coverURL as string | undefined) ?? undefined,
     modules: Array.isArray(data.modules)
       ? (data.modules as LecturerCourse["modules"])
+      : [],
+    weeklySchedule: Array.isArray(data.weeklySchedule)
+      ? (data.weeklySchedule as LecturerCourse["weeklySchedule"])
       : [],
     price: typeof data.price === "number" ? data.price : undefined,
     discountPrice:
@@ -136,6 +138,7 @@ export async function createCourse(
     visibility: patch.visibility ?? "draft",
     accessType: patch.accessType ?? "free",
     modules: patch.modules ?? [],
+    weeklySchedule: patch.weeklySchedule ?? [],
     status: patch.status ?? "draft",
     createdAt: now,
     updatedAt: now,
@@ -191,7 +194,7 @@ export async function publishCourse(
     coursePublicSlug(current.title || "course", courseId);
   return updateCourse(uid, courseId, {
     status: "published",
-    visibility: "public",
+    visibility: "publish",
     publishedAt: new Date().toISOString(),
     slug,
   });

@@ -1,7 +1,5 @@
 import type { LecturerCourse } from "@/lib/courses/types";
 
-export const MIN_COURSE_DESCRIPTION_LENGTH = 30;
-
 export type BasicsFieldKey =
   | "title"
   | "description"
@@ -25,11 +23,6 @@ export function validateBasicsStep(
   const desc = course.description?.trim() ?? "";
   if (!desc) {
     errors.description = t("lecturer.create.validation.descriptionRequired");
-  } else if (desc.length < MIN_COURSE_DESCRIPTION_LENGTH) {
-    errors.description = t("lecturer.create.validation.descriptionMin").replace(
-      "{count}",
-      String(MIN_COURSE_DESCRIPTION_LENGTH),
-    );
   }
 
   if (!course.mainCategory) {
@@ -59,7 +52,7 @@ export function isBasicsStepComplete(
   const hasThumbnail = !!course.thumbnailURL || !!opts?.pendingThumbnail;
   return (
     !!course.title.trim() &&
-    desc.length >= MIN_COURSE_DESCRIPTION_LENGTH &&
+    desc.length > 0 &&
     !!course.mainCategory &&
     !!course.teachingLevel &&
     !!course.language &&
