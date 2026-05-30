@@ -6,7 +6,13 @@ import { useI18n } from "@/lib/i18n/I18nProvider";
 import type { Course } from "@/lib/data/types";
 import { Avatar } from "./Avatar";
 import { ProgressRing } from "./ProgressRing";
-import { ClockIcon, PlayCircleIcon, StarIcon, UsersIcon } from "./icons";
+import {
+  CheckCircleIcon,
+  ClockIcon,
+  PlayCircleIcon,
+  StarIcon,
+  UsersIcon,
+} from "./icons";
 
 const LKR = new Intl.NumberFormat("en-LK", {
   style: "currency",
@@ -35,6 +41,12 @@ export function CourseCard({
       : course.type === "hybrid"
       ? "badge-amber"
       : "badge-slate";
+
+  const progressPercent = Math.max(
+    0,
+    Math.min(100, Math.round(course.progressPercent ?? 0)),
+  );
+  const progressComplete = progressPercent >= 100;
 
   return (
     <Link
@@ -86,14 +98,44 @@ export function CourseCard({
           <span className="truncate">{lecturerName}</span>
         </div>
         {variant === "enrolled" && (
-          <div className="flex items-center gap-3">
-            <ProgressRing
-              percent={course.progressPercent ?? 0}
-              size={44}
-              stroke={3}
-              variant="light"
-            />
-            <p className="text-xs text-ink-500">{t("student.study.progress")}</p>
+          <div
+            className={`rounded-xl border px-3 py-3 ${
+              progressComplete
+                ? "border-emerald-200/80 bg-gradient-to-r from-emerald-50/90 to-teal-50/50"
+                : "border-brand-100 bg-gradient-to-r from-brand-50/80 to-indigo-50/40"
+            }`}
+          >
+            <div className="flex items-center gap-3">
+              <ProgressRing
+                percent={progressPercent}
+                size={52}
+                stroke={5}
+                variant="light"
+                hideCenter
+                label={`${progressPercent}% ${t("student.study.complete")}`}
+              />
+              <div className="min-w-0 flex-1">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-500">
+                  {t("student.study.progress")}
+                </p>
+                <p
+                  className={`mt-0.5 text-2xl font-bold tabular-nums leading-none ${
+                    progressComplete ? "text-emerald-600" : "text-brand-700"
+                  }`}
+                >
+                  {progressPercent}%
+                </p>
+                <p className="mt-1 text-xs text-ink-500">
+                  {t("student.study.complete")}
+                </p>
+              </div>
+              {progressComplete && (
+                <CheckCircleIcon
+                  className="h-7 w-7 shrink-0 text-emerald-500"
+                  aria-hidden
+                />
+              )}
+            </div>
           </div>
         )}
         <div className="mt-auto flex items-end justify-between pt-3 border-t border-ink-100">

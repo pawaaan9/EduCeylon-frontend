@@ -7,6 +7,7 @@ export function ProgressRing({
   className = "",
   label,
   variant = "dark",
+  hideCenter = false,
 }: {
   percent: number;
   size?: number;
@@ -14,6 +15,8 @@ export function ProgressRing({
   className?: string;
   label?: string;
   variant?: "dark" | "light";
+  /** Omit inner % text (use with external label, e.g. course cards). */
+  hideCenter?: boolean;
 }) {
   const clamped = Math.max(0, Math.min(100, Math.round(percent)));
   const radius = (size - stroke) / 2;
@@ -61,10 +64,12 @@ export function ProgressRing({
           className={`transition-all duration-500 ${fillClass}`}
         />
       </svg>
-      <span className={`absolute text-center font-bold leading-none ${textClass}`}>
-        <span className={valueClass}>{clamped}</span>
-        <span className={`${suffixClass} opacity-80`}>%</span>
-      </span>
+      {!hideCenter && (
+        <span className={`absolute text-center font-bold leading-none ${textClass}`}>
+          <span className={valueClass}>{clamped}</span>
+          <span className={`${suffixClass} opacity-80`}>%</span>
+        </span>
+      )}
     </div>
   );
 }
