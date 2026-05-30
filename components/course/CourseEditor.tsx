@@ -12,8 +12,9 @@ import {
 } from "@/components/icons";
 import { CourseAssetUpload } from "@/components/course/CourseAssetUpload";
 import { CourseTagInput } from "@/components/course/CourseTagInput";
-import { DateChipPicker } from "@/components/DateChipPicker";
 import { ModulesEditor } from "@/components/course/ModulesEditor";
+import { ReviewCurriculumPreview } from "@/components/course/ReviewCurriculumPreview";
+import { QuizEditorPanel } from "@/components/course/QuizEditor";
 import { WeeklyScheduleEditor } from "@/components/course/WeeklyScheduleEditor";
 import {
   createMyCourse,
@@ -33,10 +34,13 @@ import {
   type CourseLanguage,
   type CourseTeachingLevel,
   type CourseType,
+  type CourseModule,
+  type Lesson,
   emptyCourse,
   type LecturerCourse,
 } from "@/lib/courses/types";
 import { isBasicsStepComplete } from "@/lib/courses/create-validation";
+import { summarizeCourseQuizzes } from "@/lib/courses/quiz";
 import { useAuth } from "@/lib/firebase/AuthProvider";
 import { useT } from "@/lib/i18n/I18nProvider";
 
@@ -51,6 +55,12 @@ const STEPS: { key: StepKey; labelKey: string }[] = [
 ];
 
 const CREATE_DRAFT_STORAGE_KEY = "educeylon:lecturer-create-draft-id";
+
+function coursesListPath(courseType?: CourseType) {
+  return courseType === "live"
+    ? "/lecturer/courses/live"
+    : "/lecturer/courses/recorded";
+}
 
 type PendingAssets = {
   thumbnail?: File;
@@ -83,6 +93,7 @@ export function CourseEditor({
   const [deleteOpen, setDeleteOpen] = useState(false);
   const savedSnapshotRef = useRef<string>("");
   const draftSavingRef = useRef(false);
+  const courseRef = useRef<LecturerCourse | null>(null);
   const persistedIdRef = useRef<string | null>(initialCourseId ?? null);
   const pendingAssetsRef = useRef<PendingAssets>({});
 
@@ -93,6 +104,10 @@ export function CourseEditor({
   useEffect(() => {
     pendingAssetsRef.current = pendingAssets;
   }, [pendingAssets]);
+
+  useEffect(() => {
+    courseRef.current = course;
+  }, [course]);
 
   const loginNext = persistedId
     ? `/lecturer/create?id=${encodeURIComponent(persistedId)}`
@@ -139,6 +154,7 @@ export function CourseEditor({
         const data = await getMyCourse(token, persistedId);
         if (!alive) return;
         setCourse(data);
+        courseRef.current = data;
         savedSnapshotRef.current = snapshot(data);
       } catch (e) {
         if (!alive) return;
@@ -158,6 +174,7 @@ export function CourseEditor({
       id: "local-draft",
     };
     setCourse(draft);
+    courseRef.current = draft;
     savedSnapshotRef.current = snapshot(draft);
   }, [authLoading, user, persistedId, course]);
 
@@ -184,7 +201,11 @@ export function CourseEditor({
       }
       if (Object.keys(patch).length > 0) {
         const updated = await updateMyCourse(token, targetId, patch);
-        setCourse((prev) => (prev ? { ...prev, ...updated } : prev));
+        setCourse((prev) => {
+          const next = prev ? { ...prev, ...updated } : prev;
+          if (next) courseRef.current = next;
+          return next;
+        });
         savedSnapshotRef.current = snapshot(updated);
       }
       setPendingAssets({});
@@ -204,6 +225,7 @@ export function CourseEditor({
       const merged = await getMyCourse(token, created.id);
       savedSnapshotRef.current = snapshot(merged);
       setCourse(merged);
+      courseRef.current = merged;
       persistedIdRef.current = created.id;
       setPersistedId(created.id);
       sessionStorage.setItem(CREATE_DRAFT_STORAGE_KEY, created.id);
@@ -212,34 +234,42 @@ export function CourseEditor({
     [user, flushPendingAssets],
   );
 
-  async function handleSaveDraft() {
-    if (!course || !user || draftSavingRef.current) return;
-    const payload: LecturerCourse = {
-      ...course,
-      status: "draft",
-    };
+  const persistDraft = useCallback(
+    async (override?: LecturerCourse) => {
+      const current = override ?? courseRef.current;
+      if (!current || !user || draftSavingRef.current) return;
 
-    draftSavingRef.current = true;
-    setSavingStatus("saving");
-    setError(null);
-    try {
-      const token = await user.getIdToken();
-      const id =
-        persistedIdRef.current ?? (await ensurePersisted(payload));
-      const result = await updateMyCourse(token, id, editablePatch(payload));
-      savedSnapshotRef.current = snapshot(result);
-      setCourse(result);
-      setSavingStatus("saved");
-    } catch (e) {
-      setSavingStatus("error");
-      setError(e instanceof Error ? e.message : "Could not save draft");
-    } finally {
-      draftSavingRef.current = false;
-    }
+      const payload: LecturerCourse = { ...current, status: "draft" };
+
+      draftSavingRef.current = true;
+      setSavingStatus("saving");
+      setError(null);
+      try {
+        const token = await user.getIdToken();
+        const id =
+          persistedIdRef.current ?? (await ensurePersisted(payload));
+        const result = await updateMyCourse(token, id, editablePatch(payload));
+        savedSnapshotRef.current = snapshot(result);
+        setCourse(result);
+        courseRef.current = result;
+        setSavingStatus("saved");
+      } catch (e) {
+        setSavingStatus("error");
+        setError(e instanceof Error ? e.message : "Could not save draft");
+      } finally {
+        draftSavingRef.current = false;
+      }
+    },
+    [user, ensurePersisted],
+  );
+
+  async function handleSaveDraft() {
+    await persistDraft();
   }
 
   async function handlePublish() {
-    if (!user || !course) return;
+    const current = courseRef.current;
+    if (!user || !current) return;
     if (!basicsReady) {
       setStepIdx(0);
       return;
@@ -248,13 +278,13 @@ export function CourseEditor({
     setError(null);
     try {
       const token = await user.getIdToken();
-      const id = persistedIdRef.current ?? (await ensurePersisted(course));
-      await updateMyCourse(token, id, editablePatch(course));
+      const id = persistedIdRef.current ?? (await ensurePersisted(current));
+      await updateMyCourse(token, id, editablePatch(current));
       const result = await publishMyCourse(token, id);
       setCourse(result);
       savedSnapshotRef.current = snapshot(result);
       sessionStorage.removeItem(CREATE_DRAFT_STORAGE_KEY);
-      router.replace("/lecturer/courses");
+      router.replace(coursesListPath(result.courseType));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not publish");
     } finally {
@@ -266,14 +296,14 @@ export function CourseEditor({
     setDeleteOpen(false);
     sessionStorage.removeItem(CREATE_DRAFT_STORAGE_KEY);
     if (!persistedId) {
-      router.replace("/lecturer/courses");
+      router.replace(coursesListPath(course?.courseType));
       return;
     }
     if (!user) return;
     try {
       const token = await user.getIdToken();
       await deleteMyCourse(token, persistedId);
-      router.replace("/lecturer/courses");
+      router.replace(coursesListPath(course?.courseType));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not delete course");
     }
@@ -312,8 +342,47 @@ export function CourseEditor({
   }
 
   const patchCourse = useCallback((patch: Partial<LecturerCourse>) => {
-    setCourse((prev) => (prev ? { ...prev, ...patch } : prev));
+    const prev = courseRef.current;
+    if (!prev) return;
+    const next = { ...prev, ...patch };
+    courseRef.current = next;
+    setCourse(next);
   }, []);
+
+  const patchModules = useCallback(
+    (update: CourseModule[] | ((prev: CourseModule[]) => CourseModule[])) => {
+      const prev = courseRef.current;
+      if (!prev) return;
+      const modules =
+        typeof update === "function" ? update(prev.modules) : update;
+      const next = { ...prev, modules };
+      courseRef.current = next;
+      setCourse(next);
+    },
+    [],
+  );
+
+  const patchLessonMedia = useCallback(
+    (moduleId: string, lessonId: string, patch: Partial<Lesson>) => {
+      const prev = courseRef.current;
+      if (!prev) return;
+      const modules = prev.modules.map((m) =>
+        m.id === moduleId
+          ? {
+              ...m,
+              lessons: m.lessons.map((l) =>
+                l.id === lessonId ? { ...l, ...patch } : l,
+              ),
+            }
+          : m,
+      );
+      const next = { ...prev, modules };
+      courseRef.current = next;
+      setCourse(next);
+      void persistDraft(next);
+    },
+    [persistDraft],
+  );
 
   if (!course) {
     return (
@@ -453,6 +522,8 @@ export function CourseEditor({
             course={course}
             onChange={patchCourse}
             uploadCourseId={persistedId}
+            onModulesChange={patchModules}
+            onLessonMediaUploaded={patchLessonMedia}
           />
         )}
         {step.key === "pricing" && (
@@ -483,7 +554,7 @@ export function CourseEditor({
               {t("lecturer.create.delete")}
             </button>
             <Link
-              href="/lecturer/courses"
+              href={coursesListPath(course?.courseType)}
               className="btn btn-ghost"
             >
               {t("lecturer.courses.manage")}
@@ -896,10 +967,20 @@ function ContentStep({
   course,
   onChange,
   uploadCourseId,
+  onModulesChange,
+  onLessonMediaUploaded,
 }: {
   course: LecturerCourse;
   onChange: (patch: Partial<LecturerCourse>) => void;
   uploadCourseId: string | null;
+  onModulesChange: (
+    update: CourseModule[] | ((prev: CourseModule[]) => CourseModule[]),
+  ) => void;
+  onLessonMediaUploaded?: (
+    moduleId: string,
+    lessonId: string,
+    patch: Partial<Lesson>,
+  ) => void;
 }) {
   const t = useT();
   const showModules = course.courseType === "recorded";
@@ -944,8 +1025,19 @@ function ContentStep({
           <ModulesEditor
             courseId={uploadCourseId}
             modules={course.modules}
-            onChange={(modules) => onChange({ modules })}
+            onChange={onModulesChange}
+            onLessonMediaUploaded={onLessonMediaUploaded}
           />
+
+          <div className="rounded-xl border border-ink-200 bg-white p-4 sm:p-5">
+            <QuizEditorPanel
+              value={course.finalQuiz}
+              onChange={(finalQuiz) => onChange({ finalQuiz })}
+              enableLabel={t("lecturer.create.quiz.enableCourseQuiz")}
+              heading={t("lecturer.create.quiz.courseHeading")}
+              description={t("lecturer.create.quiz.courseDescription")}
+            />
+          </div>
         </>
       )}
     </div>
@@ -1035,22 +1127,6 @@ function PricingStep({
           </div>
         )}
 
-        <div className="grid sm:grid-cols-2 gap-4">
-          <Labeled label={t("lecturer.create.startDate")}>
-            <DateChipPicker
-              label={t("lecturer.create.startDate")}
-              value={course.startDate}
-              onChange={(startDate) => onChange({ startDate })}
-            />
-          </Labeled>
-          <Labeled label={t("lecturer.create.endDate")}>
-            <DateChipPicker
-              label={t("lecturer.create.endDate")}
-              value={course.endDate}
-              onChange={(endDate) => onChange({ endDate })}
-            />
-          </Labeled>
-        </div>
       </div>
     </div>
   );
@@ -1067,6 +1143,7 @@ function ReviewStep({
     (acc, m) => acc + m.lessons.length,
     0,
   );
+  const { quizCount, questionCount } = summarizeCourseQuizzes(course);
   const slotCount = course.weeklySchedule?.length ?? 0;
   const showModulesRow = course.courseType === "recorded";
   const showScheduleRow = course.courseType === "live";
@@ -1090,10 +1167,20 @@ function ReviewStep({
         <Row label={t("lecturer.create.access.label")} value={t(`lecturer.create.access.${course.accessType}`)} />
         <Row label={t("lecturer.create.price")} value={course.accessType === "paid" && course.price ? `LKR ${course.price.toLocaleString()}` : t("lecturer.create.access.free")} />
         {showModulesRow && (
-          <Row
-            label={t("lecturer.create.content.modules.title")}
-            value={`${course.modules.length} ${t("lecturer.courses.modules")} · ${totalLessons} ${t("lecturer.courses.lessons")}`}
-          />
+          <>
+            <Row
+              label={t("lecturer.create.content.modules.title")}
+              value={`${course.modules.length} ${t("lecturer.courses.modules")} · ${totalLessons} ${t("lecturer.courses.lessons")}`}
+            />
+            <Row
+              label={t("lecturer.create.review.quizzes")}
+              value={
+                quizCount === 0
+                  ? "—"
+                  : `${quizCount} ${t("lecturer.create.review.quizCount")} · ${questionCount} ${t("lecturer.create.review.questionCount")}`
+              }
+            />
+          </>
         )}
         {showScheduleRow && (
           <>
@@ -1116,6 +1203,8 @@ function ReviewStep({
           </>
         )}
       </dl>
+
+      {showModulesRow ? <ReviewCurriculumPreview course={course} /> : null}
     </div>
   );
 }

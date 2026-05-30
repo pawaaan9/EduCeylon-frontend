@@ -32,10 +32,20 @@ export default function LecturerLayout({
       items: [
         { href: "/lecturer", label: t("lecturer.nav.dashboard"), icon: HomeIcon },
         {
-          href: "/lecturer/courses",
           label: t("lecturer.nav.courses"),
           icon: BookIcon,
-          exact: true,
+          children: [
+            {
+              href: "/lecturer/courses/recorded",
+              label: t("lecturer.nav.recorded"),
+              icon: PlayCircleIcon,
+            },
+            {
+              href: "/lecturer/courses/live",
+              label: t("lecturer.nav.live"),
+              icon: CalendarIcon,
+            },
+          ],
         },
         {
           href: "/lecturer/create?new=1",
@@ -43,12 +53,6 @@ export default function LecturerLayout({
           icon: PlusIcon,
           alsoActiveWhen: (pathname) => pathname.startsWith("/lecturer/create"),
         },
-        {
-          href: "/lecturer/recorded",
-          label: t("lecturer.nav.recorded"),
-          icon: PlayCircleIcon,
-        },
-        { href: "/lecturer/live", label: t("lecturer.nav.live"), icon: CalendarIcon },
       ],
     },
     {

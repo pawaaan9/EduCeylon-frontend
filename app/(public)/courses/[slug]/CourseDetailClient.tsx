@@ -2,9 +2,11 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { useEffect, useState, useCallback } from "react";
 import { useI18n } from "@/lib/i18n/I18nProvider";
 import { Avatar } from "@/components/Avatar";
+import { CourseReviewsSection } from "@/components/CourseReviewsSection";
 import {
   CheckCircleIcon,
   ClockIcon,
@@ -13,7 +15,13 @@ import {
   StarIcon,
   UsersIcon,
 } from "@/components/icons";
+import {
+  checkMyEnrollment,
+  enrollInCourse,
+} from "@/lib/api/enrollments";
+import { useAuth } from "@/lib/firebase/AuthProvider";
 import type { Course, Lecturer } from "@/lib/data/types";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 
 const LKR = new Intl.NumberFormat("en-LK", {
   style: "currency",
@@ -25,15 +33,99 @@ type Tab = "about" | "curriculum" | "reviews";
 
 export function CourseDetailClient({
   course,
+  lecturer,
 }: {
   course: Course;
   lecturer: Lecturer | null;
 }) {
   const { t, locale } = useI18n();
+  const router = useRouter();
+  const pathname = usePathname() ?? `/courses/${course.slug}`;
+  const searchParams = useSearchParams();
+  const { user, profile, loading: authLoading } = useAuth();
   const [tab, setTab] = useState<Tab>("about");
+  const [ratingStats, setRatingStats] = useState({
+    rating: course.rating,
+    reviews: course.reviews,
+  });
+  const [enrolled, setEnrolled] = useState(false);
+  const [enrollLoading, setEnrollLoading] = useState(false);
+  const [checkingEnrollment, setCheckingEnrollment] = useState(false);
+  const [enrollError, setEnrollError] = useState<string | null>(null);
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
   const title = course.title[locale] ?? course.title.en;
   const longDesc = course.longDescription[locale] ?? course.longDescription.en;
+
+  useEffect(() => {
+    const requestedTab = searchParams.get("tab");
+    if (requestedTab === "about" || requestedTab === "curriculum" || requestedTab === "reviews") {
+      setTab(requestedTab);
+    }
+  }, [searchParams]);
+
+  useEffect(() => {
+    if (authLoading || !user || profile?.role !== "student") {
+      setEnrolled(false);
+      return;
+    }
+    let cancelled = false;
+    setCheckingEnrollment(true);
+    void (async () => {
+      try {
+        const token = await user.getIdToken();
+        const isEnrolled = await checkMyEnrollment(token, course.id);
+        if (!cancelled) setEnrolled(isEnrolled);
+      } catch {
+        if (!cancelled) setEnrolled(false);
+      } finally {
+        if (!cancelled) setCheckingEnrollment(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [authLoading, user, profile?.role, course.id]);
+
+  const handleReviewSummaryChange = useCallback(
+    (summary: { averageRating: number; count: number }) => {
+      setRatingStats({
+        rating: summary.averageRating,
+        reviews: summary.count,
+      });
+    },
+    [],
+  );
+
+  function openEnrollConfirm() {
+    setEnrollError(null);
+    if (!user) {
+      router.push(`/login?next=${encodeURIComponent(pathname)}`);
+      return;
+    }
+    if (profile?.role !== "student") {
+      setEnrollError(t("course.enrollStudentsOnly"));
+      return;
+    }
+    setConfirmOpen(true);
+  }
+
+  async function handleEnrollConfirm() {
+    if (!user) return;
+    setEnrollLoading(true);
+    setEnrollError(null);
+    try {
+      const token = await user.getIdToken();
+      await enrollInCourse(token, course.id);
+      setConfirmOpen(false);
+      router.push("/student/courses");
+    } catch (e) {
+      setEnrollError(e instanceof Error ? e.message : t("course.enrollFailed"));
+      setConfirmOpen(false);
+    } finally {
+      setEnrollLoading(false);
+    }
+  }
 
   return (
     <div className="grid lg:grid-cols-3 gap-8">
@@ -85,8 +177,10 @@ export function CourseDetailClient({
         <div className="flex flex-wrap items-center gap-5 text-sm text-ink-600">
           <span className="inline-flex items-center gap-1.5">
             <StarIcon className="h-4 w-4 text-amber-500" />
-            <strong className="text-ink-900">{course.rating.toFixed(1)}</strong>
-            ({course.reviews} {t("course.reviews").toLowerCase()})
+            <strong className="text-ink-900">
+              {ratingStats.reviews > 0 ? ratingStats.rating.toFixed(1) : "—"}
+            </strong>
+            ({ratingStats.reviews} {t("course.reviews").toLowerCase()})
           </span>
           <span className="inline-flex items-center gap-1.5">
             <UsersIcon className="h-4 w-4" />
@@ -101,7 +195,11 @@ export function CourseDetailClient({
         </div>
 
         <div className="flex items-center gap-3 p-4 rounded-2xl border border-ink-200 bg-white">
-          <Avatar name={course.lecturer.name} size={48} />
+          <Avatar
+            name={course.lecturer.name}
+            src={lecturer?.photoURL}
+            size={48}
+          />
           <div className="min-w-0 flex-1">
             <div className="text-xs text-ink-500">{t("course.lecturer")}</div>
             <Link
@@ -178,9 +276,15 @@ export function CourseDetailClient({
             </div>
           )}
           {tab === "reviews" && (
-            <div className="card p-8 text-center text-ink-500">
-              Student reviews coming soon — be among the first to review this course!
-            </div>
+            <CourseReviewsSection
+              courseSlug={course.slug}
+              initialSummary={{
+                averageRating: ratingStats.rating,
+                count: ratingStats.reviews,
+              }}
+              enrolled={enrolled}
+              onSummaryChange={handleReviewSummaryChange}
+            />
           )}
         </div>
       </div>
@@ -189,15 +293,39 @@ export function CourseDetailClient({
         <div className="card p-6 sticky top-20 flex flex-col gap-4">
           <div>
             <div className="text-3xl font-bold text-brand-700">
-              {LKR.format(course.price)}
+              {course.price > 0
+                ? LKR.format(course.price)
+                : t("lecturer.create.access.free")}
             </div>
-            <div className="text-xs text-ink-500 mt-1">
-              One-time purchase · lifetime access
-            </div>
+            {course.price > 0 && (
+              <div className="text-xs text-ink-500 mt-1">
+                One-time purchase · lifetime access
+              </div>
+            )}
           </div>
-          <button className="btn btn-primary justify-center w-full">
-            {t("course.enroll")}
-          </button>
+          {enrollError && (
+            <p className="text-sm text-rose-600" role="alert">
+              {enrollError}
+            </p>
+          )}
+          {enrolled ? (
+            <Link
+              href={`/student/courses/${course.slug}/learn`}
+              className="btn btn-primary justify-center w-full"
+            >
+              <CheckCircleIcon className="h-4 w-4" />
+              {t("student.study.continueLearning")}
+            </Link>
+          ) : (
+            <button
+              type="button"
+              onClick={openEnrollConfirm}
+              disabled={enrollLoading || checkingEnrollment}
+              className="btn btn-primary justify-center w-full disabled:opacity-60"
+            >
+              {t("course.enroll")}
+            </button>
+          )}
           <button className="btn btn-secondary justify-center w-full">
             <HeartIcon className="h-4 w-4" /> {t("student.nav.wishlist")}
           </button>
@@ -222,6 +350,25 @@ export function CourseDetailClient({
           </div>
         </div>
       </aside>
+
+      {confirmOpen && (
+        <ConfirmDialog
+          title={t("course.enrollConfirm.title")}
+          description={
+            <>
+              {t("course.enrollConfirm.description")}{" "}
+              <strong className="text-ink-900">{title}</strong>?
+            </>
+          }
+          confirmLabel={
+            enrollLoading ? t("course.enrolling") : t("course.enrollConfirm.confirm")
+          }
+          cancelLabel={t("action.cancel")}
+          onCancel={() => setConfirmOpen(false)}
+          onConfirm={() => void handleEnrollConfirm()}
+          loading={enrollLoading}
+        />
+      )}
     </div>
   );
 }

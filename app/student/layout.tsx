@@ -9,6 +9,7 @@ import {
   ChartIcon,
   HeartIcon,
   HomeIcon,
+  JournalIcon,
   SettingsIcon,
   GlobeIcon,
 } from "@/components/icons";
@@ -31,6 +32,7 @@ export default function StudentLayout({
         { href: "/student/courses", label: t("student.nav.myCourses"), icon: BookIcon },
         { href: "/student/live", label: t("student.nav.live"), icon: CalendarIcon },
         { href: "/student/progress", label: t("student.nav.progress"), icon: ChartIcon },
+        { href: "/student/journal", label: t("student.nav.journal"), icon: JournalIcon },
       ],
     },
     {

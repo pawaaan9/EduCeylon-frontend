@@ -9,6 +9,7 @@ import { SignOutConfirmDialog } from "./SignOutConfirmDialog";
 import { LanguageSwitcher } from "@/lib/i18n/LanguageSwitcher";
 import {
   BellIcon,
+  ChevronDownIcon,
   CloseIcon,
   LogoutIcon,
   MenuIcon,
@@ -17,14 +18,25 @@ import {
 import { useT } from "@/lib/i18n/I18nProvider";
 import { useAuth } from "@/lib/firebase/AuthProvider";
 
-export type NavItem = {
+export type NavChildItem = {
   href: string;
+  label: string;
+  icon?: React.ComponentType<React.SVGProps<SVGSVGElement>>;
+  /** When true, only `/href` matches — not child paths like `/href/123`. */
+  exact?: boolean;
+  /** Extra pathnames that should highlight this item. */
+  alsoActiveWhen?: (pathname: string) => boolean;
+};
+
+export type NavItem = {
+  href?: string;
   label: string;
   icon: React.ComponentType<React.SVGProps<SVGSVGElement>>;
   /** When true, only `/href` matches — not child paths like `/href/123`. */
   exact?: boolean;
   /** Extra pathnames that should highlight this item (e.g. course editor under create). */
   alsoActiveWhen?: (pathname: string) => boolean;
+  children?: NavChildItem[];
 };
 
 export type NavSection = {
@@ -121,8 +133,11 @@ export function DashboardShell({
   const pageTitle = useMemo(() => {
     if (!activeHref) return undefined;
     for (const section of sections) {
-      const item = section.items.find((i) => i.href === activeHref);
-      if (item) return item.label;
+      for (const item of section.items) {
+        if (item.href === activeHref) return item.label;
+        const child = item.children?.find((c) => c.href === activeHref);
+        if (child) return child.label;
+      }
     }
     return undefined;
   }, [sections, activeHref]);
@@ -272,21 +287,36 @@ function getActiveNavHref(pathname: string, sections: NavSection[]): string | nu
   let matchScore = -1;
   for (const section of sections) {
     for (const item of section.items) {
-      const score = navItemMatchScore(pathname, item);
-      if (score > matchScore) {
-        match = item.href;
-        matchScore = score;
+      if (item.children) {
+        for (const child of item.children) {
+          const score = navLinkMatchScore(pathname, child);
+          if (score > matchScore) {
+            match = child.href;
+            matchScore = score;
+          }
+        }
+      }
+      if (item.href) {
+        const score = navLinkMatchScore(pathname, item);
+        if (score > matchScore) {
+          match = item.href;
+          matchScore = score;
+        }
       }
     }
   }
   return match;
 }
 
-function navItemMatchScore(pathname: string, item: NavItem): number {
-  if (item.alsoActiveWhen?.(pathname)) {
-    return 10_000 + item.href.length;
-  }
+function navLinkMatchScore(
+  pathname: string,
+  item: Pick<NavItem, "href" | "exact" | "alsoActiveWhen">,
+): number {
   const href = item.href;
+  if (!href) return -1;
+  if (item.alsoActiveWhen?.(pathname)) {
+    return 10_000 + href.length;
+  }
   if (item.exact) {
     if (pathname === href || pathname === `${href}/`) {
       return 5_000 + href.length;
@@ -325,11 +355,22 @@ function SidebarNav({
             <div className="sidebar-section-label">{section.heading}</div>
           )}
           {section.items.map((item) => {
+            if (item.children?.length) {
+              return (
+                <NavGroupItem
+                  key={item.label}
+                  item={item}
+                  activeHref={activeHref}
+                  onNavigate={onNavigate}
+                />
+              );
+            }
+
             const active = item.href === activeHref;
             return (
               <Link
-                key={item.href}
-                href={item.href}
+                key={item.href ?? item.label}
+                href={item.href!}
                 onClick={onNavigate}
                 className="sidebar-link"
                 data-active={active}
@@ -342,6 +383,67 @@ function SidebarNav({
         </div>
       ))}
     </nav>
+  );
+}
+
+function NavGroupItem({
+  item,
+  activeHref,
+  onNavigate,
+}: {
+  item: NavItem;
+  activeHref: string | null;
+  onNavigate?: () => void;
+}) {
+  const children = item.children ?? [];
+  const childActive = children.some((c) => c.href === activeHref);
+  const groupActive = childActive || item.href === activeHref;
+  const [expanded, setExpanded] = useState(childActive);
+
+  useEffect(() => {
+    if (childActive) setExpanded(true);
+  }, [childActive]);
+
+  return (
+    <div className="space-y-0.5">
+      <button
+        type="button"
+        onClick={() => setExpanded((open) => !open)}
+        className="sidebar-link sidebar-link-group w-full text-left"
+        data-active={groupActive}
+        aria-expanded={expanded}
+      >
+        <item.icon className="h-5 w-5 shrink-0" />
+        <span className="flex-1 min-w-0">{item.label}</span>
+        <ChevronDownIcon
+          className={`h-4 w-4 shrink-0 text-ink-400 transition-transform duration-200 ${
+            expanded ? "rotate-180" : ""
+          }`}
+          aria-hidden
+        />
+      </button>
+      {expanded &&
+        children.map((child) => {
+          const ChildIcon = child.icon;
+          const active = child.href === activeHref;
+          return (
+            <Link
+              key={child.href}
+              href={child.href}
+              onClick={onNavigate}
+              className="sidebar-link sidebar-link-nested"
+              data-active={active}
+            >
+              {ChildIcon ? (
+                <ChildIcon className="h-4 w-4" />
+              ) : (
+                <span className="h-4 w-4" aria-hidden />
+              )}
+              <span>{child.label}</span>
+            </Link>
+          );
+        })}
+    </div>
   );
 }
 

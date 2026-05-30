@@ -21,6 +21,64 @@ export type Lesson = {
   preview?: boolean;
 };
 
+export type StudyLesson = {
+  id: string;
+  type: "video" | "pdf" | "assignment" | "quiz" | "external" | "live";
+  title: Localized;
+  durationMin: number;
+  videoURL?: string;
+  pdfURL?: string;
+  externalURL?: string;
+  quiz?: import("@/lib/courses/quiz-student").StudyQuiz;
+};
+
+export type StudyModule = {
+  id: string;
+  title: Localized;
+  lessons: StudyLesson[];
+  quiz?: import("@/lib/courses/quiz-student").StudyQuiz;
+};
+
+export type StudyCourse = {
+  id: string;
+  slug: string;
+  title: Localized;
+  longDescription: Localized;
+  thumbnailGradient: string;
+  thumbnailURL?: string;
+  lecturer: Pick<Lecturer, "id" | "slug" | "name" | "title" | "photoURL">;
+  modules: StudyModule[];
+  finalQuiz?: import("@/lib/courses/quiz-student").StudyQuiz;
+};
+
+export type QuizSubmitResult = import("@/lib/courses/quiz-student").QuizGradeResult & {
+  submittedAt: string;
+};
+
+export type QuizAttemptSummary = {
+  quizId: string;
+  scorePercent: number;
+  passed: boolean;
+  submittedAt: string;
+};
+
+export type CourseStudyProgress = {
+  completedLessonIds: string[];
+  completedModuleIds: string[];
+  updatedAt?: string;
+  /** 0–100, set by API when total lesson count is known. */
+  percent?: number;
+  completedLessons?: number;
+  totalLessons?: number;
+};
+
+export type StudyCourseWithProgress = StudyCourse & {
+  progress: CourseStudyProgress;
+  quizAttempts?: Record<string, QuizAttemptSummary>;
+};
+
+export type { StudyQuiz } from "@/lib/courses/quiz-student";
+
 export type CourseModule = {
   id: string;
   title: Localized;
@@ -68,9 +126,33 @@ export type Course = {
   trending?: boolean;
   thumbnailGradient: string;
   thumbnailURL?: string;
-  lecturer: Pick<Lecturer, "id" | "slug" | "name" | "title">;
+  lecturer: Pick<Lecturer, "id" | "slug" | "name" | "title" | "photoURL">;
   modules: CourseModule[];
   status?: "published" | "draft" | "pending" | "rejected";
+  /** Enrollment progress 0–100 (student my-courses only). */
+  progressPercent?: number;
+};
+
+export type CourseReview = {
+  id: string;
+  courseId: string;
+  studentId: string;
+  studentName: string;
+  studentPhotoURL?: string;
+  rating: number;
+  comment: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CourseReviewSummary = {
+  averageRating: number;
+  count: number;
+};
+
+export type CourseReviewsPayload = {
+  reviews: CourseReview[];
+  summary: CourseReviewSummary;
 };
 
 export type LiveSession = {

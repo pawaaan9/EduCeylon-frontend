@@ -40,6 +40,8 @@ export type Lesson = {
   durationMinutes?: number;
   freePreview?: boolean;
   liveSession?: LiveSession;
+  /** Optional quiz on any lesson; primary content when `type === "quiz"`. */
+  quiz?: CourseQuiz;
 };
 
 export type LiveSession = {
@@ -54,10 +56,32 @@ export type LiveSession = {
   description?: string;
 };
 
+export type QuizOption = {
+  id: string;
+  text: string;
+};
+
+export type QuizQuestion = {
+  id: string;
+  prompt: string;
+  options: QuizOption[];
+  correctOptionId: string;
+};
+
+export type CourseQuiz = {
+  id: string;
+  title?: string;
+  instructions?: string;
+  optionCount?: number;
+  passingScorePercent?: number;
+  questions: QuizQuestion[];
+};
+
 export type CourseModule = {
   id: string;
   title: string;
   lessons: Lesson[];
+  quiz?: CourseQuiz;
 };
 
 export type WeeklyDay =
@@ -116,6 +140,8 @@ export type LecturerCourse = {
   coverURL?: string;
 
   modules: CourseModule[];
+  /** Final course-end quiz (recorded courses). */
+  finalQuiz?: CourseQuiz;
   /** Weekly recurring schedule (live courses). */
   weeklySchedule?: WeeklyScheduleSlot[];
 
@@ -130,6 +156,9 @@ export type LecturerCourse = {
   publishedAt?: string;
   createdAt?: string;
   updatedAt?: string;
+  /** Denormalized from courseReviews — do not set manually in editor. */
+  reviewCount?: number;
+  ratingSum?: number;
 };
 
 export type AdminCourseRow = {

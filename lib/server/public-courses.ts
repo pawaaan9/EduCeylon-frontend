@@ -16,10 +16,10 @@ import type {
   Lecturer,
   Localized,
 } from "@/lib/data/types";
-import { listAllLecturerProfiles } from "./admin-lecturers";
+import { approvedLecturerMap } from "./approved-lecturers";
+import { countEnrollmentsForCourse } from "./enrollments";
 import { LECTURER_COURSES, normalizeCourse } from "./courses";
 import { getAdmin } from "./firebase-admin";
-import { profileToPublicLecturer } from "./public-lecturers";
 
 const THUMBNAIL_GRADIENTS = [
   "linear-gradient(135deg,#1e3a8a,#2563eb 70%,#60a5fa)",
@@ -87,16 +87,6 @@ function mapModules(modules: CourseModule[]): PublicModule[] {
   }));
 }
 
-async function approvedLecturerMap(): Promise<Map<string, Lecturer>> {
-  const profiles = await listAllLecturerProfiles();
-  const map = new Map<string, Lecturer>();
-  for (const profile of profiles) {
-    if (profile.approvalStatus !== "approved") continue;
-    map.set(profile.uid, profileToPublicLecturer(profile));
-  }
-  return map;
-}
-
 export async function listPublishedCoursesRaw(): Promise<LecturerCourse[]> {
   const { db } = getAdmin();
   const snap = await db
@@ -114,6 +104,19 @@ export async function listPublishedCoursesRaw(): Promise<LecturerCourse[]> {
     );
 }
 
+function courseReviewStatsFromRaw(
+  reviewCount?: number,
+  ratingSum?: number,
+): { rating: number; reviews: number } {
+  const count = reviewCount ?? 0;
+  const sum = ratingSum ?? 0;
+  if (count <= 0) return { rating: 0, reviews: 0 };
+  return {
+    rating: Math.round((sum / count) * 10) / 10,
+    reviews: count,
+  };
+}
+
 export function lecturerCourseToPublic(
   course: LecturerCourse,
   lecturer: Lecturer | null,
@@ -124,6 +127,10 @@ export function lecturerCourseToPublic(
   const slug = resolveCourseSlug(course);
   const price =
     course.accessType === "free" ? 0 : Math.max(0, course.price ?? 0);
+  const { rating, reviews } = courseReviewStatsFromRaw(
+    course.reviewCount,
+    course.ratingSum,
+  );
 
   return {
     id: course.id,
@@ -136,8 +143,8 @@ export function lecturerCourseToPublic(
     type: course.courseType,
     language: course.language ?? "en",
     price,
-    rating: 0,
-    reviews: 0,
+    rating,
+    reviews,
     students: 0,
     lessons,
     hours,
@@ -149,6 +156,7 @@ export function lecturerCourseToPublic(
           slug: lecturer.slug,
           name: lecturer.name,
           title: lecturer.title,
+          photoURL: lecturer.photoURL,
         }
       : {
           id: course.lecturerId,
@@ -209,8 +217,10 @@ export async function getPublicCourseBySlug(
   const raw = courses.find((c) => resolveCourseSlug(c) === slug);
   if (!raw) return null;
   const lecturer = lecturers.get(raw.lecturerId) ?? null;
+  const course = lecturerCourseToPublic(raw, lecturer);
+  course.students = await countEnrollmentsForCourse(raw.id);
   return {
-    course: lecturerCourseToPublic(raw, lecturer),
+    course,
     lecturer,
   };
 }

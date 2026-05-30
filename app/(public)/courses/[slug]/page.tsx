@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { getPublicCourseBySlug } from "@/lib/server/public-courses";
@@ -25,7 +26,15 @@ export default async function CourseDetailPage({
           Courses
         </Link>
       </nav>
-      <CourseDetailClient course={result.course} lecturer={result.lecturer} />
+      <Suspense
+        fallback={
+          <div className="flex min-h-[320px] items-center justify-center">
+            <div className="h-7 w-7 animate-spin rounded-full border-2 border-brand-200 border-t-brand-600" />
+          </div>
+        }
+      >
+        <CourseDetailClient course={result.course} lecturer={result.lecturer} />
+      </Suspense>
     </div>
   );
 }

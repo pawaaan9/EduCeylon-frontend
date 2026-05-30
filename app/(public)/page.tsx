@@ -1,12 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { CourseCard } from "@/components/CourseCard";
+import { FeaturedCoursesSection } from "@/components/FeaturedCoursesSection";
 import { HomeLecturersSection } from "@/components/PublicLecturersSection";
 import { SectionHeader } from "@/components/SectionHeader";
 import { useI18n } from "@/lib/i18n/I18nProvider";
-import { CATEGORIES, COURSES, LIVE_SESSIONS } from "@/lib/data/mock";
-import { formatLiveSessionStart } from "@/lib/format-live-session-start";
+import { useAuth } from "@/lib/firebase/AuthProvider";
+import { CATEGORIES } from "@/lib/data/mock";
 import {
   ArrowRightIcon,
   BoltIcon,
@@ -17,8 +17,8 @@ import {
 } from "@/components/icons";
 
 export default function HomePage() {
-  const { t, locale } = useI18n();
-  const featured = COURSES.filter((c) => c.featured).slice(0, 6);
+  const { t } = useI18n();
+  const { user, loading: authLoading } = useAuth();
   return (
     <div className="flex flex-col">
       {/* HERO */}
@@ -116,61 +116,7 @@ export default function HomePage() {
           </div>
         </section>
 
-        {/* FEATURED COURSES */}
-        <section>
-          <SectionHeader
-            eyebrow="Featured"
-            title={t("home.featured.title")}
-            subtitle={t("home.featured.subtitle")}
-            action={
-              <Link
-                href="/courses"
-                className="inline-flex items-center gap-1 text-sm font-semibold text-brand-700 hover:text-brand-900"
-              >
-                {t("home.featured.viewAll")}
-                <ArrowRightIcon className="h-4 w-4" />
-              </Link>
-            }
-          />
-          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
-            {featured.map((course) => (
-              <CourseCard key={course.id} course={course} />
-            ))}
-          </div>
-        </section>
-
-        {/* UPCOMING LIVE */}
-        <section>
-          <SectionHeader
-            eyebrow="Live"
-            title={t("home.live.title")}
-            subtitle={t("home.live.subtitle")}
-          />
-          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {LIVE_SESSIONS.map((s) => (
-                <div key={s.id} className="card p-5 flex flex-col gap-3">
-                  <div className="flex items-center justify-between">
-                    <span className="badge badge-rose live-dot">LIVE</span>
-                    <span className="text-xs text-ink-500">
-                      {formatLiveSessionStart(s.startsAt, locale, {
-                        weekday: "short",
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      })}
-                    </span>
-                  </div>
-                  <h3 className="font-semibold text-ink-900 line-clamp-2">
-                    {s.courseTitle[locale] ?? s.courseTitle.en}
-                  </h3>
-                  <div className="text-sm text-ink-600">{s.lecturerName}</div>
-                  <button className="btn btn-secondary mt-auto justify-center">
-                    <PlayCircleIcon className="h-4 w-4" />
-                    {t("home.live.join")}
-                  </button>
-                </div>
-            ))}
-          </div>
-        </section>
+        <FeaturedCoursesSection limit={6} />
 
         <HomeLecturersSection limit={4} />
 
@@ -208,7 +154,8 @@ export default function HomePage() {
           </div>
         </section>
 
-        {/* CTA */}
+        {/* CTA — hidden when already signed in */}
+        {!authLoading && !user && (
         <section className="relative overflow-hidden rounded-3xl brand-gradient p-10 sm:p-14 text-white">
           <div
             className="absolute inset-0 opacity-25"
@@ -241,6 +188,7 @@ export default function HomePage() {
             </div>
           </div>
         </section>
+        )}
       </div>
     </div>
   );

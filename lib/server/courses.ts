@@ -32,6 +32,34 @@ function stripUndefined(obj: Record<string, unknown>): Record<string, unknown> {
   return out;
 }
 
+function deepStripUndefined<T>(value: T): T {
+  if (value === undefined) return value;
+  if (Array.isArray(value)) {
+    return value.map((item) => deepStripUndefined(item)) as T;
+  }
+  if (value !== null && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      if (v !== undefined) out[k] = deepStripUndefined(v);
+    }
+    return out as T;
+  }
+  return value;
+}
+
+function prepareCourseWritePayload(
+  patch: Record<string, unknown>,
+): Record<string, unknown> {
+  const base = stripUndefined(patch);
+  if (Array.isArray(base.modules)) {
+    base.modules = deepStripUndefined(base.modules);
+  }
+  if (Array.isArray(base.weeklySchedule)) {
+    base.weeklySchedule = deepStripUndefined(base.weeklySchedule);
+  }
+  return base;
+}
+
 export function normalizeCourse(id: string, data: Record<string, unknown>): LecturerCourse {
   const base: LecturerCourse = {
     id,
@@ -71,6 +99,14 @@ export function normalizeCourse(id: string, data: Record<string, unknown>): Lect
     publishedAt: timestampToIso(data.publishedAt),
     createdAt: timestampToIso(data.createdAt),
     updatedAt: timestampToIso(data.updatedAt),
+    reviewCount:
+      typeof data.reviewCount === "number" && data.reviewCount >= 0
+        ? Math.floor(data.reviewCount)
+        : undefined,
+    ratingSum:
+      typeof data.ratingSum === "number" && data.ratingSum >= 0
+        ? data.ratingSum
+        : undefined,
   };
   return base;
 }
@@ -131,7 +167,7 @@ export async function createCourse(
   const { db } = getAdmin();
   const ref = db.collection(LECTURER_COURSES).doc();
   const now = FieldValue.serverTimestamp();
-  const payload = stripUndefined({
+  const payload = prepareCourseWritePayload({
     ...patch,
     id: ref.id,
     lecturerId: uid,
@@ -162,7 +198,7 @@ export async function updateCourse(
 
   const { db } = getAdmin();
   const ref = db.collection(LECTURER_COURSES).doc(courseId);
-  const payload = stripUndefined({
+  const payload = prepareCourseWritePayload({
     ...patch,
     lecturerId: uid,
     updatedAt: FieldValue.serverTimestamp(),

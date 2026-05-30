@@ -66,6 +66,11 @@ export function mergeStudentProfileDoc(
     schoolName: (data.schoolName as string | undefined) ?? undefined,
     bio: (data.bio as string | undefined) ?? undefined,
     notificationPrefs: normalizeNotificationPrefs(data.notificationPrefs),
+    dailyStudyGoalMinutes:
+      typeof data.dailyStudyGoalMinutes === "number" &&
+      data.dailyStudyGoalMinutes > 0
+        ? Math.min(24 * 60, Math.round(data.dailyStudyGoalMinutes))
+        : undefined,
     createdAt: timestampToIso(data.createdAt),
     updatedAt: timestampToIso(data.updatedAt),
   };
@@ -109,6 +114,14 @@ export async function saveStudentProfile(
     notificationPrefs: next.notificationPrefs,
     updatedAt: FieldValue.serverTimestamp(),
   };
+
+  if (patch.dailyStudyGoalMinutes !== undefined) {
+    const goal = patch.dailyStudyGoalMinutes;
+    payload.dailyStudyGoalMinutes =
+      typeof goal === "number" && goal > 0
+        ? Math.min(24 * 60, Math.round(goal))
+        : FieldValue.delete();
+  }
 
   if (!existing) {
     payload.createdAt = FieldValue.serverTimestamp();

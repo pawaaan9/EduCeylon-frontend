@@ -9,7 +9,9 @@ import {
   TrashIcon,
 } from "@/components/icons";
 import { CourseFileUpload } from "@/components/course/CourseFileUpload";
+import { QuizEditor, QuizEditorPanel } from "@/components/course/QuizEditor";
 import { DateChipPicker } from "@/components/DateChipPicker";
+import { ensureQuiz, emptyQuiz } from "@/lib/courses/quiz";
 import {
   LESSON_TYPE_OPTIONS,
   newClientId,
@@ -25,17 +27,30 @@ export function ModulesEditor({
   courseId,
   modules,
   onChange,
+  onLessonMediaUploaded,
 }: {
   courseId?: string | null;
   modules: CourseModule[];
-  onChange: (next: CourseModule[]) => void;
+  onChange: (
+    update: CourseModule[] | ((prev: CourseModule[]) => CourseModule[]),
+  ) => void;
+  /** Apply lesson media + persist course draft with the updated snapshot. */
+  onLessonMediaUploaded?: (
+    moduleId: string,
+    lessonId: string,
+    patch: Partial<Lesson>,
+  ) => void;
 }) {
   const t = useT();
   const [drag, setDrag] = useState<DragState>(null);
 
+  function mutateModules(update: (prev: CourseModule[]) => CourseModule[]) {
+    onChange(update);
+  }
+
   function addModule() {
-    onChange([
-      ...modules,
+    mutateModules((prev) => [
+      ...prev,
       {
         id: newClientId("mod"),
         title: "",
@@ -45,32 +60,33 @@ export function ModulesEditor({
   }
 
   function updateModule(id: string, patch: Partial<CourseModule>) {
-    onChange(modules.map((m) => (m.id === id ? { ...m, ...patch } : m)));
+    mutateModules((prev) =>
+      prev.map((m) => (m.id === id ? { ...m, ...patch } : m)),
+    );
   }
 
   function removeModule(id: string) {
-    onChange(modules.filter((m) => m.id !== id));
+    mutateModules((prev) => prev.filter((m) => m.id !== id));
   }
 
   function moveModule(id: string, dir: -1 | 1) {
-    const idx = modules.findIndex((m) => m.id === id);
-    const target = idx + dir;
-    if (idx < 0 || target < 0 || target >= modules.length) return;
-    const next = modules.slice();
-    [next[idx], next[target]] = [next[target]!, next[idx]!];
-    onChange(next);
+    mutateModules((prev) => {
+      const idx = prev.findIndex((m) => m.id === id);
+      const target = idx + dir;
+      if (idx < 0 || target < 0 || target >= prev.length) return prev;
+      const next = prev.slice();
+      [next[idx], next[target]] = [next[target]!, next[idx]!];
+      return next;
+    });
   }
 
   function addLesson(moduleId: string, type: LessonType = "video") {
-    onChange(
-      modules.map((m) =>
+    mutateModules((prev) =>
+      prev.map((m) =>
         m.id === moduleId
           ? {
               ...m,
-              lessons: [
-                ...m.lessons,
-                emptyLesson(type),
-              ],
+              lessons: [...m.lessons, emptyLesson(type)],
             }
           : m,
       ),
@@ -82,8 +98,8 @@ export function ModulesEditor({
     lessonId: string,
     patch: Partial<Lesson>,
   ) {
-    onChange(
-      modules.map((m) =>
+    mutateModules((prev) =>
+      prev.map((m) =>
         m.id === moduleId
           ? {
               ...m,
@@ -97,8 +113,8 @@ export function ModulesEditor({
   }
 
   function removeLesson(moduleId: string, lessonId: string) {
-    onChange(
-      modules.map((m) =>
+    mutateModules((prev) =>
+      prev.map((m) =>
         m.id === moduleId
           ? { ...m, lessons: m.lessons.filter((l) => l.id !== lessonId) }
           : m,
@@ -108,8 +124,8 @@ export function ModulesEditor({
 
   function reorderLessons(moduleId: string, fromId: string, toId: string) {
     if (fromId === toId) return;
-    onChange(
-      modules.map((m) => {
+    mutateModules((prev) =>
+      prev.map((m) => {
         if (m.id !== moduleId) return m;
         const fromIdx = m.lessons.findIndex((l) => l.id === fromId);
         const toIdx = m.lessons.findIndex((l) => l.id === toId);
@@ -190,6 +206,7 @@ export function ModulesEditor({
                         moduleId={mod.id}
                         lesson={lesson}
                         onUpdate={(patch) => updateLesson(mod.id, lesson.id, patch)}
+                        onLessonMediaUploaded={onLessonMediaUploaded}
                         onRemove={() => removeLesson(mod.id, lesson.id)}
                         onDragStart={() => setDrag({ moduleId: mod.id, lessonId: lesson.id })}
                         onDragOver={(e) => {
@@ -215,6 +232,16 @@ export function ModulesEditor({
                       {t("lecturer.create.lesson.add")}
                     </button>
                   </div>
+
+                  <QuizEditorPanel
+                    value={mod.quiz}
+                    onChange={(quiz) =>
+                      updateModule(mod.id, { quiz: quiz ?? undefined })
+                    }
+                    enableLabel={t("lecturer.create.quiz.enableModuleQuiz")}
+                    heading={t("lecturer.create.quiz.moduleHeading")}
+                    description={t("lecturer.create.quiz.moduleDescription")}
+                  />
                 </div>
               </div>
             </div>
@@ -237,11 +264,15 @@ export function ModulesEditor({
 }
 
 function emptyLesson(type: LessonType): Lesson {
-  return {
+  const base: Lesson = {
     id: newClientId("les"),
     type,
     title: "",
   };
+  if (type === "quiz") {
+    base.quiz = emptyQuiz();
+  }
+  return base;
 }
 
 function LessonRow({
@@ -249,6 +280,7 @@ function LessonRow({
   moduleId,
   lesson,
   onUpdate,
+  onLessonMediaUploaded,
   onRemove,
   onDragStart,
   onDragOver,
@@ -258,13 +290,17 @@ function LessonRow({
   moduleId: string;
   lesson: Lesson;
   onUpdate: (patch: Partial<Lesson>) => void;
+  onLessonMediaUploaded?: (
+    moduleId: string,
+    lessonId: string,
+    patch: Partial<Lesson>,
+  ) => void;
   onRemove: () => void;
   onDragStart: () => void;
   onDragOver: (e: React.DragEvent) => void;
   onDrop: () => void;
 }) {
   const t = useT();
-  void moduleId;
   const uploadsDisabled = !courseId;
 
   return (
@@ -290,11 +326,23 @@ function LessonRow({
             />
             <select
               value={lesson.type}
-              onChange={(e) => onUpdate({ type: e.target.value as LessonType })}
+              onChange={(e) => {
+                const type = e.target.value as LessonType;
+                if (type === "quiz") {
+                  onUpdate({
+                    type,
+                    quiz: ensureQuiz(lesson.quiz),
+                  });
+                } else {
+                  onUpdate({ type });
+                }
+              }}
               className="input-base select-base"
               aria-label={t("lecturer.create.lesson.type")}
             >
-              {LESSON_TYPE_OPTIONS.map((tp) => (
+              {LESSON_TYPE_OPTIONS.filter(
+                (tp) => tp !== "quiz" || lesson.type === "quiz",
+              ).map((tp) => (
                 <option key={tp} value={tp}>
                   {t(`lecturer.create.lessonType.${tp}`)}
                 </option>
@@ -327,7 +375,22 @@ function LessonRow({
                   label={t("lecturer.create.lesson.video")}
                   accept="video/*"
                   currentUrl={lesson.videoURL}
-                  onChange={(url) => onUpdate({ videoURL: url })}
+                  onChange={(url) => {
+                    if (!url) onUpdate({ videoURL: undefined });
+                  }}
+                  onUploaded={({ url, durationMinutes }) => {
+                    const patch = {
+                      videoURL: url,
+                      ...(durationMinutes != null
+                        ? { durationMinutes }
+                        : {}),
+                    };
+                    if (onLessonMediaUploaded) {
+                      onLessonMediaUploaded(moduleId, lesson.id, patch);
+                    } else {
+                      onUpdate(patch);
+                    }
+                  }}
                   disabled={uploadsDisabled}
                   disabledHint={t("lecturer.create.saveBeforeUpload")}
                 />
@@ -338,7 +401,17 @@ function LessonRow({
                   label={t("lecturer.create.lesson.pdf")}
                   accept="application/pdf,.pdf"
                   currentUrl={lesson.pdfURL}
-                  onChange={(url) => onUpdate({ pdfURL: url })}
+                  onChange={(url) => {
+                    if (!url) onUpdate({ pdfURL: undefined });
+                  }}
+                  onUploaded={({ url }) => {
+                    const patch = { pdfURL: url };
+                    if (onLessonMediaUploaded) {
+                      onLessonMediaUploaded(moduleId, lesson.id, patch);
+                    } else {
+                      onUpdate(patch);
+                    }
+                  }}
                   disabled={uploadsDisabled}
                   disabledHint={t("lecturer.create.saveBeforeUpload")}
                 />
@@ -371,6 +444,25 @@ function LessonRow({
               value={lesson.liveSession ?? {}}
               onChange={(liveSession) => onUpdate({ liveSession })}
             />
+          )}
+
+          {lesson.type === "quiz" ? (
+            <QuizEditor
+              value={lesson.quiz}
+              onChange={(quiz) => onUpdate({ quiz })}
+              heading={t("lecturer.create.quiz.lessonHeading")}
+              description={t("lecturer.create.quiz.lessonDescription")}
+            />
+          ) : (
+            <div className="ml-1 border-l-2 border-brand-100 pl-4">
+              <QuizEditorPanel
+                value={lesson.quiz}
+                onChange={(quiz) => onUpdate({ quiz: quiz ?? undefined })}
+                enableLabel={t("lecturer.create.quiz.enableLessonQuiz")}
+                heading={t("lecturer.create.quiz.lessonHeading")}
+                description={t("lecturer.create.quiz.lessonQuizDescription")}
+              />
+            </div>
           )}
         </div>
       </div>

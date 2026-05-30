@@ -59,6 +59,10 @@ export function apiPatch<T>(path: string, init?: ApiRequestInit): Promise<T> {
   return apiRequest<T>(path, { ...init, method: "PATCH" });
 }
 
+export function apiPut<T>(path: string, init?: ApiRequestInit): Promise<T> {
+  return apiRequest<T>(path, { ...init, method: "PUT" });
+}
+
 export function apiDelete<T>(path: string, init?: ApiRequestInit): Promise<T> {
   return apiRequest<T>(path, { ...init, method: "DELETE" });
 }

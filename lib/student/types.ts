@@ -24,6 +24,8 @@ export type StudentProfile = {
   schoolName?: string;
   bio?: string;
   notificationPrefs: StudentNotificationPrefs;
+  /** Personal study target for the learning journal (minutes). */
+  dailyStudyGoalMinutes?: number;
   createdAt?: string;
   updatedAt?: string;
 };
